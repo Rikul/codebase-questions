@@ -3,7 +3,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
-import { finalizeHistory, gitEnv } from '../history/git.js';
+import { dirSizeMb, finalizeHistory, gitEnv } from '../history/git.js';
 import type { HistoryInfo } from '../history/git.js';
 
 const run = promisify(execFile);
@@ -60,7 +60,8 @@ function authedUrl(p: ParsedRepoUrl): string {
   return u.toString();
 }
 
-function dirSizeMb(dir: string): number {
+/** Working-tree size (excludes .git, which is limited separately by MAX_HISTORY_MB). */
+function treeSizeMb(dir: string): number {
   let total = 0;
   const stack = [dir];
   while (stack.length) {
@@ -74,7 +75,7 @@ function dirSizeMb(dir: string): number {
   return total / 1024 / 1024;
 }
 
-export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commit: string; history: HistoryInfo | null }> {
+export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commit: string; history: HistoryInfo | null; warnings: string[] }> {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   // Auth comes only from GITHUB_TOKEN; interactive credential helpers are dropped (see gitEnv).
@@ -94,19 +95,42 @@ export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commi
     fs.rmSync(dest, { recursive: true, force: true });
     throw new Error(`git clone failed: ${msg.trim().split('\n').slice(-3).join(' ')}`);
   }
-  const { stdout } = await run('git', ['-C', dest, 'rev-parse', 'HEAD'], { env });
-  const commit = stdout.trim();
+  return prepareCheckout(dest, p.url, depth, config.ingest.githubToken);
+}
+
+/**
+ * Post-clone setup: scrub credentials and record history (or drop .git), then enforce size limits.
+ * On any failure the checkout is deleted, so a token can never be left on disk.
+ */
+export async function prepareCheckout(dest: string, cleanUrl: string, depth: number, secret?: string): Promise<{ commit: string; history: HistoryInfo | null; warnings: string[] }> {
+  const env = gitEnv();
+  const warnings: string[] = [];
+  let commit: string;
   let history: HistoryInfo | null = null;
-  if (depth < 0) {
-    // History disabled: drop .git entirely (it holds the credentialed remote).
-    fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
-  } else {
-    history = await finalizeHistory(dest, p.url, depth);
+  try {
+    commit = (await run('git', ['-C', dest, 'rev-parse', 'HEAD'], { env })).stdout.trim();
+    if (depth < 0) {
+      // History disabled: drop .git entirely (it holds the credentialed remote).
+      fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
+    } else {
+      // Throws if credentials cannot be scrubbed; the checkout is then removed below.
+      history = await finalizeHistory(dest, cleanUrl, depth, secret);
+      const gitMb = dirSizeMb(path.join(dest, '.git'));
+      if (gitMb > config.ingest.maxHistoryMb) {
+        fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
+        history = null;
+        warnings.push(`Git history is ${gitMb.toFixed(0)} MB (over MAX_HISTORY_MB=${config.ingest.maxHistoryMb}); continuing without history. Lower HISTORY_DEPTH to keep some.`);
+      }
+    }
+  } catch (err) {
+    fs.rmSync(dest, { recursive: true, force: true });
+    const msg = String((err as Error).message).replaceAll(secret || '\u0000', '***');
+    throw new Error(`Post-clone setup failed: ${msg}`);
   }
-  const size = dirSizeMb(dest);
+  const size = treeSizeMb(dest);
   if (size > config.ingest.maxRepoMb) {
     fs.rmSync(dest, { recursive: true, force: true });
     throw new Error(`Repository is ${size.toFixed(0)} MB which exceeds MAX_REPO_MB=${config.ingest.maxRepoMb}`);
   }
-  return { commit, history };
+  return { commit, history, warnings };
 }

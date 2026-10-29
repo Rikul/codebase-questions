@@ -23,13 +23,23 @@ export function CommitModal({ sha, path, onClose }: { sha: string; path?: string
   const [scope, setScope] = useState<string | undefined>(path);
   const [c, setC] = useState<Commit | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Opening a different commit/file while the modal is open resets the diff scope.
+  useEffect(() => {
+    setScope(path);
+  }, [sha, path]);
   useEffect(() => {
     setC(null);
     setError(null);
+    let active = true;
     api<Commit | { available: false; reason: string }>(`/repos/${repo.id}/commits/${sha}${scope ? `?path=${encodeURIComponent(scope)}` : ''}`).then(
-      (r) => (r.available ? setC(r) : setError(r.reason)),
-      (e) => setError(e.message),
+      (r) => {
+        if (active) r.available ? setC(r) : setError(r.reason);
+      },
+      (e) => active && setError(e.message),
     );
+    return () => {
+      active = false;
+    };
   }, [repo.id, sha, scope]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();

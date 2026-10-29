@@ -63,7 +63,8 @@ function parseCommits(out: string) {
 }
 
 /** Index commits and per-file changes from the clone's history (one pass each for statuses and line counts). */
-export async function indexHistory(db: DB, repoId: string, dir: string, info: HistoryInfo, maxCommits: number): Promise<{ commits: number }> {
+export async function indexHistory(db: DB, repoId: string, dir: string, info: HistoryInfo, maxCommits: number): Promise<{ commits: number; total: number }> {
+  const total = Number((await git(dir, ['rev-list', '--count', 'HEAD'])).trim()) || 0;
   const [statusOut, numOut] = await Promise.all([
     git(dir, ['log', '-n', String(maxCommits), '-M', '--name-status', FMT]),
     git(dir, ['log', '-n', String(maxCommits), '-M', '--numstat', '--format=' + RS + '%H' + US]),
@@ -100,40 +101,89 @@ export async function indexHistory(db: DB, repoId: string, dir: string, info: Hi
         insF.run(repoId, path, c.sha, status === 'C' ? 'A' : status, oldPath, n?.[0] ?? null, n?.[1] ?? null);
       }
     });
-    db.prepare('UPDATE repos SET history_depth=?, history_shallow=?, history_root=? WHERE id=?').run(info.depth, info.shallow ? 1 : 0, info.rootSha, repoId);
+    db.prepare('UPDATE repos SET history_depth=?, history_shallow=?, history_root=?, history_boundaries=?, history_total=?, history_capped=? WHERE id=?').run(
+      info.depth,
+      info.shallow ? 1 : 0,
+      info.rootSha,
+      JSON.stringify(info.boundaries ?? (info.shallow && info.rootSha ? [info.rootSha] : [])),
+      total,
+      commits.length < total ? 1 : 0,
+      repoId,
+    );
   })();
-  return { commits: commits.length };
+  return { commits: commits.length, total };
+}
+
+export interface HistoryMeta {
+  shallow: boolean;
+  /** HISTORY_INDEX_COMMITS stopped indexing before the oldest available commit. */
+  capped: boolean;
+  /** Commits with missing parents: anything "added" there may be older. */
+  boundaries: Set<string>;
+  indexed: number;
+  total: number;
+  truncated: boolean;
+}
+
+export function historyMeta(db: DB, repoId: string): HistoryMeta {
+  const r = (db.prepare('SELECT history_shallow, history_root, history_boundaries, history_total, history_capped FROM repos WHERE id=?').get(repoId) ?? {}) as any;
+  const indexed = (db.prepare('SELECT count(*) AS n FROM commits WHERE repo_id=?').get(repoId) as any).n as number;
+  // Older databases only stored one boundary in history_root (meaningful only for shallow clones).
+  const boundaries = new Set<string>(json<string[]>(r.history_boundaries, r.history_shallow && r.history_root ? [r.history_root] : []));
+  const capped = Boolean(r.history_capped);
+  // A capped index needs no extra boundary: commits are still diffed against their real parents, so a file whose
+  // oldest indexed change is not an "add" is already reported as uncertain.
+  const shallow = Boolean(r.history_shallow);
+  return { shallow, capped, boundaries, indexed, total: r.history_total ?? indexed, truncated: shallow || capped };
 }
 
 export function historyAvailable(db: DB, repoId: string): boolean {
   return Boolean((db.prepare('SELECT 1 FROM commits WHERE repo_id=? LIMIT 1').get(repoId)));
 }
 
-/** Timeline of one file, following renames back through its earlier names. */
-export function fileHistory(db: DB, repoId: string, path: string): FileHistory | Unavailable {
-  if (!historyAvailable(db, repoId)) return { available: false, reason: 'No git history for this project (imported without history, or HISTORY_DEPTH=-1).' };
-  const repo = db.prepare('SELECT history_shallow, history_root FROM repos WHERE id=?').get(repoId) as any;
-  const rows = db
-    .prepare(
-      `SELECT fc.path, fc.status, fc.old_path, fc.added, fc.deleted, c.sha, c.author, c.date, c.subject, c.seq
-       FROM file_commits fc JOIN commits c ON c.repo_id = fc.repo_id AND c.sha = fc.sha
-       WHERE fc.repo_id = ? ORDER BY c.seq`,
-    )
-    .all(repoId) as any[];
+interface TimelineRow {
+  path: string;
+  status: string;
+  old_path: string | null;
+  added: number | null;
+  deleted: number | null;
+  sha: string;
+  author: string;
+  date: string;
+  subject: string;
+  seq: number;
+}
+
+const ROW_SQL = `SELECT fc.path, fc.status, fc.old_path, fc.added, fc.deleted, c.sha, c.author, c.date, c.subject, c.seq
+  FROM file_commits fc JOIN commits c ON c.repo_id = fc.repo_id AND c.sha = fc.sha`;
+
+/**
+ * Build one file's timeline from per-path rows (each list ordered newest first),
+ * following renames back through earlier names.
+ */
+function buildTimeline(path: string, rowsOf: (p: string) => TimelineRow[], meta: HistoryMeta): FileHistory {
   const entries: FileTimelineEntry[] = [];
   const renames: FileHistory['renames'] = [];
   let name = path;
-  for (const r of rows) {
-    if (r.path !== name) continue;
-    entries.push({ sha: r.sha, author: r.author, date: r.date, subject: r.subject, status: r.status, path: r.path, oldPath: r.old_path, added: r.added, deleted: r.deleted });
-    if (r.status === 'R' && r.old_path) {
-      renames.push({ from: r.old_path, to: r.path, sha: r.sha, date: r.date });
-      name = r.old_path;
+  let after = -1; // only rows older than the rename we followed
+  const visited = new Set<string>();
+  outer: while (!visited.has(`${name}@${after}`)) {
+    visited.add(`${name}@${after}`);
+    for (const r of rowsOf(name)) {
+      if (r.seq <= after) continue;
+      entries.push({ sha: r.sha, author: r.author, date: r.date, subject: r.subject, status: r.status, path: r.path, oldPath: r.old_path, added: r.added, deleted: r.deleted });
+      if (r.status === 'A') break outer;
+      if (r.status === 'R' && r.old_path) {
+        renames.push({ from: r.old_path, to: r.path, sha: r.sha, date: r.date });
+        name = r.old_path;
+        after = r.seq;
+        continue outer;
+      }
     }
-    if (r.status === 'A') break;
+    break;
   }
   const oldest = entries[entries.length - 1] ?? null;
-  const uncertain = !oldest || oldest.status !== 'A' || (Boolean(repo?.history_shallow) && oldest.sha === repo?.history_root);
+  const uncertain = !oldest || oldest.status !== 'A' || meta.boundaries.has(oldest.sha);
   const authors = new Map<string, { name: string; commits: number; added: number; deleted: number }>();
   for (const e of entries) {
     const a = authors.get(e.author) ?? authors.set(e.author, { name: e.author, commits: 0, added: 0, deleted: 0 }).get(e.author)!;
@@ -150,23 +200,38 @@ export function fileHistory(db: DB, repoId: string, path: string): FileHistory |
     authors: [...authors.values()].sort((a, b) => b.commits - a.commits),
     renames,
     commits: entries.slice(0, 200),
-    truncated: Boolean(repo?.history_shallow),
+    truncated: meta.truncated,
   };
 }
 
-/** Compact per-file history facts stored in files.meta.history (used by the UI header and prompts). */
+/** Timeline of one file, following renames back through its earlier names (indexed per-path queries). */
+export function fileHistory(db: DB, repoId: string, path: string): FileHistory | Unavailable {
+  if (!historyAvailable(db, repoId)) return { available: false, reason: 'No git history for this project (imported without history, or HISTORY_DEPTH=-1).' };
+  const stmt = db.prepare(`${ROW_SQL} WHERE fc.repo_id = ? AND fc.path = ? ORDER BY c.seq`);
+  return buildTimeline(path, (p) => stmt.all(repoId, p) as TimelineRow[], historyMeta(db, repoId));
+}
+
+/** Compact per-file history facts stored in files.meta.history. Loads the history once: O(total rows). */
 export function storeFileHistorySummaries(db: DB, repoId: string) {
+  if (!historyAvailable(db, repoId)) return;
+  const meta = historyMeta(db, repoId);
+  const byPath = new Map<string, TimelineRow[]>();
+  for (const r of db.prepare(`${ROW_SQL} WHERE fc.repo_id = ? ORDER BY c.seq`).all(repoId) as TimelineRow[]) {
+    (byPath.get(r.path) ?? byPath.set(r.path, []).get(r.path)!).push(r);
+  }
   const files = db.prepare('SELECT path FROM files WHERE repo_id=?').all(repoId) as { path: string }[];
   const upd = db.prepare(`UPDATE files SET meta=json_set(coalesce(meta,'{}'), '$.history', json(?)) WHERE repo_id=? AND path=?`);
   db.transaction(() => {
     for (const f of files) {
-      const h = fileHistory(db, repoId, f.path);
-      if (!h.available || !h.commitCount) continue;
+      if (!byPath.has(f.path)) continue;
+      const h = buildTimeline(f.path, (p) => byPath.get(p) ?? [], meta);
+      if (!h.commitCount) continue;
       upd.run(
         JSON.stringify({
           createdSha: h.created?.sha,
           createdAt: h.created?.date,
           createdBy: h.created?.author,
+          createdPath: h.created?.path,
           uncertain: h.created?.uncertain,
           lastSha: h.lastChanged?.sha,
           lastAt: h.lastChanged?.date,
@@ -184,7 +249,7 @@ export function storeFileHistorySummaries(db: DB, repoId: string) {
 /** Repo-level history facts for prompts and insights. */
 export function repoHistorySummary(db: DB, repoId: string) {
   if (!historyAvailable(db, repoId)) return null;
-  const repo = db.prepare('SELECT history_shallow FROM repos WHERE id=?').get(repoId) as any;
+  const meta = historyMeta(db, repoId);
   const range = db.prepare('SELECT min(date) AS first, max(date) AS last, count(*) AS n FROM commits WHERE repo_id=?').get(repoId) as any;
   const authors = db.prepare('SELECT author, count(*) AS n FROM commits WHERE repo_id=? GROUP BY author ORDER BY n DESC LIMIT 8').all(repoId) as any[];
   const hotspots = (db
@@ -194,7 +259,18 @@ export function repoHistorySummary(db: DB, repoId: string) {
     )
     .all(repoId) as any[]);
   const recent = db.prepare('SELECT sha, author, date, subject FROM commits WHERE repo_id=? ORDER BY seq LIMIT 10').all(repoId) as CommitRow[];
-  return { firstCommit: range.first, lastCommit: range.last, commitCount: range.n, truncated: Boolean(repo?.history_shallow), authors, hotspots, recent };
+  return {
+    firstCommit: range.first,
+    lastCommit: range.last,
+    commitCount: range.n,
+    totalCommits: meta.total,
+    truncated: meta.truncated,
+    shallow: meta.shallow,
+    capped: meta.capped,
+    authors,
+    hotspots,
+    recent,
+  };
 }
 
 export function fileMetaHistory(meta: string | null) {

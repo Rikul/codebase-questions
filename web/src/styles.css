@@ -441,3 +441,7 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .files .file-view { flex: 1 1 0; }
 .files .panel { flex: none; }
 .files-changed summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin-bottom: 6px; }
+
+.blame-btn { all: unset; display: flex; gap: 6px; width: 100%; cursor: pointer; border-radius: 3px; }
+.blame-btn:hover { color: var(--accent); }
+.blame-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

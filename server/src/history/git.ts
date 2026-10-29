@@ -42,23 +42,53 @@ export function safeSha(sha: string): string {
 
 export interface HistoryInfo {
   shallow: boolean;
+  /** Oldest available commit (first shallow boundary, or the root commit). Kept for compatibility. */
   rootSha: string | null;
+  /** Shallow boundaries: commits whose parents were not fetched (empty for a full clone, whose roots are real). */
+  boundaries: string[];
   depth: number;
 }
 
-/** After cloning: strip credentials, drop reflogs, and record how much history we have. */
-export async function finalizeHistory(dir: string, cleanUrl: string, depth: number): Promise<HistoryInfo> {
-  await git(dir, ['remote', 'set-url', 'origin', cleanUrl]).catch(() => undefined);
+export function dirSizeMb(dir: string): number {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length) {
+    const d = stack.pop()!;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) stack.push(p);
+      else if (e.isFile()) total += fs.statSync(p).size;
+    }
+  }
+  return total / 1024 / 1024;
+}
+
+/**
+ * After cloning: strip credentials, drop reflogs, and record how much history we have.
+ * Throws if the credentialed remote cannot be removed; the caller must then delete the checkout.
+ */
+export async function finalizeHistory(dir: string, cleanUrl: string, depth: number, secret?: string): Promise<HistoryInfo> {
+  await git(dir, ['remote', 'set-url', 'origin', cleanUrl]);
   // Reflogs and FETCH_HEAD can mention the fetch URL; they are not needed.
   fs.rmSync(path.join(dir, '.git', 'logs'), { recursive: true, force: true });
   fs.rmSync(path.join(dir, '.git', 'FETCH_HEAD'), { force: true });
+  const remote = (await git(dir, ['config', '--get', 'remote.origin.url'])).trim();
+  if (remote !== cleanUrl || /\/\/[^/]*@/.test(remote)) throw new Error('Could not scrub credentials from the cloned repository');
+  if (secret) {
+    for (const f of ['config', 'packed-refs', 'ORIG_HEAD']) {
+      const file = path.join(dir, '.git', f);
+      if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(secret)) throw new Error('Could not scrub credentials from the cloned repository');
+    }
+  }
   const shallow = (await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true';
-  const roots = (await git(dir, ['rev-list', '--max-parents=0', 'HEAD'])).trim().split('\n').filter(Boolean);
-  let rootSha = roots[roots.length - 1] ?? null;
+  let boundaries: string[] = [];
+  let rootSha: string | null;
   if (shallow) {
     const shallowFile = path.join(dir, '.git', 'shallow');
-    const boundary = fs.existsSync(shallowFile) ? fs.readFileSync(shallowFile, 'utf8').trim().split('\n')[0] : null;
-    rootSha = boundary || rootSha;
+    boundaries = fs.existsSync(shallowFile) ? fs.readFileSync(shallowFile, 'utf8').split('\n').map((l) => l.trim()).filter(Boolean) : [];
+    rootSha = boundaries[0] ?? null;
+  } else {
+    rootSha = (await git(dir, ['rev-list', '--max-parents=0', 'HEAD'])).trim().split('\n').filter(Boolean)[0] ?? null;
   }
-  return { shallow, rootSha, depth };
+  return { shallow, rootSha, boundaries, depth };
 }

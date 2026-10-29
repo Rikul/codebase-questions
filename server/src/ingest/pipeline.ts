@@ -112,7 +112,8 @@ export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProv
   try {
     const dir = repoDir(repoId);
     emit('clone', `Cloning ${repo.url}`, 0.02);
-    const { commit, history } = await cloneRepo(parseRepoUrl(repo.url), dir);
+    const { commit, history, warnings: cloneWarnings } = await cloneRepo(parseRepoUrl(repo.url), dir);
+    warnings.push(...cloneWarnings);
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
     await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w), history);
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);

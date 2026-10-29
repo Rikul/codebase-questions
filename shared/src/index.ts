@@ -343,6 +343,8 @@ export const ExportSchema = z.object({
       fileCommits: z.array(z.object({ path: z.string(), sha: z.string(), status: z.string(), oldPath: z.string().nullable(), added: z.number().nullable(), deleted: z.number().nullable() })),
       shallow: z.boolean(),
       root: z.string().nullable(),
+      boundaries: z.array(z.string()).optional(),
+      total: z.number().optional(),
     })
     .optional(),
   refs: z

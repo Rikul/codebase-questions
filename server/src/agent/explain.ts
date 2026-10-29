@@ -28,7 +28,7 @@ export function agentEventMapper(emit: (e: AgentStreamEvent) => void) {
 const SYSTEM = `You are a senior engineer explaining one part of an unfamiliar codebase to a colleague.
 ${AGENT_GUIDANCE}
 
-Answer five questions and submit them with submit_explanation:
+Answer six questions and submit them with submit_explanation:
 1. what — what it is and its main responsibility.
 2. howItFits — its place in the project: component/layer, what depends on it, what it depends on.
 3. whenUsed — when it runs or is loaded: at startup, on which HTTP routes, from which jobs/CLI commands, only in tests, at build time. Use importer_chain and file_info, and follow callers upward.
@@ -205,9 +205,12 @@ export async function explain(
   emit({ type: 'target', target });
   const file = ix.fileRow(target.path);
   const key = cacheKey(target, req.snippet?.text);
+  // Cache version: file content plus the newest indexed commit, so re-analysis with new history invalidates it.
+  const head = db.prepare('SELECT sha FROM commits WHERE repo_id=? ORDER BY seq LIMIT 1').get(repoId) as { sha: string } | undefined;
+  const version = `${file.hash}:${head?.sha ?? 'nohistory'}`;
   if (!req.refresh) {
     const hit = db.prepare('SELECT content, file_hash, created_at FROM explanations WHERE repo_id=? AND key=?').get(repoId, key) as any;
-    if (hit && hit.file_hash === file.hash) {
+    if (hit && hit.file_hash === version) {
       const parsed = ExplanationSchema.safeParse(JSON.parse(hit.content));
       if (parsed.success) return void emit({ type: 'result', explanation: parsed.data, cached: true, createdAt: hit.created_at });
     }
@@ -220,7 +223,7 @@ export async function explain(
       tools: repoTools(ix),
       maxSteps: 12,
       maxTokens: 6000,
-      final: { name: 'explanation', schema: ExplanationSchema, description: 'Submit the finished explanation (all five questions).' },
+      final: { name: 'explanation', schema: ExplanationSchema, description: 'Submit the finished explanation (all six questions; history only if git history is available).' },
       onEvent: agentEventMapper(emit),
       scripted: async (call) => ({ final: await scripted(call, target, symbol) }),
     },
@@ -228,7 +231,7 @@ export async function explain(
   );
   const explanation = cleanExplanation(ix, run.final as Explanation);
   db.prepare(`INSERT INTO explanations (repo_id, key, file_hash, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))
-              ON CONFLICT(repo_id, key) DO UPDATE SET file_hash=excluded.file_hash, content=excluded.content, created_at=excluded.created_at`).run(repoId, key, file.hash, JSON.stringify(explanation));
+              ON CONFLICT(repo_id, key) DO UPDATE SET file_hash=excluded.file_hash, content=excluded.content, created_at=excluded.created_at`).run(repoId, key, version, JSON.stringify(explanation));
   emit({ type: 'result', explanation, cached: false, createdAt: new Date().toISOString() });
 }
 

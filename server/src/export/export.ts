@@ -64,8 +64,10 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
       fileCommits: (db.prepare('SELECT path, sha, status, old_path, added, deleted FROM file_commits WHERE repo_id=?').all(repoId) as any[])
         .filter((f) => shas.has(f.sha))
         .map((f) => ({ path: f.path, sha: f.sha, status: f.status, oldPath: f.old_path, added: f.added, deleted: f.deleted })),
-      shallow: Boolean(repo.history_shallow) || commits.length >= 2000,
-      root: commits.length >= 2000 ? commits[commits.length - 1].sha : repo.history_root,
+      shallow: Boolean(repo.history_shallow),
+      root: repo.history_root,
+      boundaries: json<string[]>(repo.history_boundaries, repo.history_shallow && repo.history_root ? [repo.history_root] : []),
+      total: Math.max(repo.history_total ?? 0, (db.prepare('SELECT count(*) AS n FROM commits WHERE repo_id=?').get(repoId) as any).n),
     };
   }
   if (includeSource) {
@@ -117,7 +119,14 @@ export function importProject(db: DB, data: unknown): string {
       for (const c of p.history.commits) insC.run(repoId, c.sha, c.seq, c.author, c.date, c.subject, c.body);
       const insFc = db.prepare('INSERT INTO file_commits (repo_id, path, sha, status, old_path, added, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)');
       for (const f of p.history.fileCommits) insFc.run(repoId, f.path, f.sha, f.status, f.oldPath, f.added, f.deleted);
-      db.prepare('UPDATE repos SET history_shallow=?, history_root=? WHERE id=?').run(p.history.shallow ? 1 : 0, p.history.root, repoId);
+      db.prepare('UPDATE repos SET history_shallow=?, history_root=?, history_boundaries=?, history_total=?, history_capped=? WHERE id=?').run(
+        p.history.shallow ? 1 : 0,
+        p.history.root,
+        JSON.stringify(p.history.boundaries ?? (p.history.shallow && p.history.root ? [p.history.root] : [])),
+        p.history.total ?? p.history.commits.length,
+        (p.history.total ?? 0) > p.history.commits.length ? 1 : 0,
+        repoId,
+      );
     }
     const insR = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const r of p.refs ?? []) insR.run(repoId, r.name, r.path, r.line, r.kind, r.fromSymbol, r.targetPath, r.targetLine, r.confidence);

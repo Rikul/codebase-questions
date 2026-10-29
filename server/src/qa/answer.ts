@@ -234,8 +234,12 @@ async function historyAnswer(db: DB, repoId: string, question: string, focus: As
   let target: { path: string; name?: string } | null = focus?.path ? { path: focus.path, name: focus.symbol?.name } : null;
   if (!target?.name) {
     const words = [...new Set(question.match(/[A-Za-z_$][\w$]{2,}/g) ?? [])];
+    // With a focused file, only consider symbols in that file; otherwise search the repository.
+    const scope = target?.path ? ' AND path = ?' : '';
     const hits = words.length
-      ? (db.prepare(`SELECT path, name, kind FROM symbols WHERE repo_id=? AND name IN (${words.map(() => '?').join(',')}) AND kind != 'route'`).all(repoId, ...words) as any[])
+      ? (db
+          .prepare(`SELECT path, name, kind FROM symbols WHERE repo_id=? AND name IN (${words.map(() => '?').join(',')}) AND kind != 'route'${scope}`)
+          .all(repoId, ...words, ...(target?.path ? [target.path] : [])) as any[])
       : [];
     const isTest = (p: string) => /(^|\/)(tests?|__tests__|spec|e2e)\//.test(p) || /\.(test|spec)\./.test(p);
     const hit = hits.sort((a, b) => Number(isTest(a.path)) - Number(isTest(b.path)) || (a.kind === 'function' ? -1 : 1))[0];

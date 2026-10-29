@@ -332,7 +332,14 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
       run: async (i) => {
         const h = fileHistory(ix.db, ix.repoId, ix.requireFile(i.path));
         if (!h.available) return h.reason;
-        return { ...h, commits: h.commits.slice(0, 40).map((c) => ({ sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), author: c.author, status: c.status, subject: c.subject, added: c.added, deleted: c.deleted })) };
+        const shown = h.commits.slice(0, 40);
+        return {
+          ...h,
+          totalCommits: h.commitCount,
+          shownCommits: shown.length,
+          note: shown.length < h.commitCount ? `Showing the ${shown.length} most recent of ${h.commitCount} commits; "created" is computed from all of them.` : undefined,
+          commits: shown.map((c) => ({ sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), author: c.author, status: c.status, path: c.path, subject: c.subject, added: c.added, deleted: c.deleted })),
+        };
       },
     },
     {
@@ -343,7 +350,13 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
       run: async (i) => {
         const h = await symbolHistory(ix.db, ix.repoId, { path: i.path, name: i.name, start: i.start_line, end: i.end_line });
         if (!h.available) return h.reason;
-        return { ...h, commits: h.commits.slice(0, 25).map((c) => ({ ...c, sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), excerpt: c.excerpt.slice(0, 1200) })) };
+        const shown = h.commits.slice(0, 25);
+        return {
+          ...h,
+          shownCommits: shown.length,
+          note: shown.length < h.totalCommits ? `Showing the ${shown.length} most recent of ${h.totalCommits} changes; "introduced" is computed from all of them.` : undefined,
+          commits: shown.map((c) => ({ ...c, sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), excerpt: c.excerpt.slice(0, 1200) })),
+        };
       },
     },
     {

@@ -194,9 +194,20 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
                     if (!r) return <td className="blame" />;
                     const t = (new Date(r.date).getTime() - blameAt.min) / Math.max(1, blameAt.max - blameAt.min);
                     return (
-                      <td className="blame start" style={{ ['--age' as string]: String(t) }} title={`${r.sha.slice(0, 8)} · ${r.author} · ${r.date.slice(0, 10)}\n${r.summary}`} onClick={(e) => { e.stopPropagation(); onBlameClick?.(r.sha); }}>
-                        <span className="who">{initials(r.author)}</span>
-                        <span className="when">{age(r.date)}</span>
+                      <td className="blame start" style={{ ['--age' as string]: String(t) }}>
+                        <button
+                          type="button"
+                          className="blame-btn"
+                          title={`${r.sha.slice(0, 8)} · ${r.author} · ${r.date.slice(0, 10)}\n${r.summary}`}
+                          aria-label={`Open commit ${r.sha.slice(0, 7)} by ${r.author} on ${r.date.slice(0, 10)}: ${r.summary}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onBlameClick?.(r.sha);
+                          }}
+                        >
+                          <span className="who">{initials(r.author)}</span>
+                          <span className="when">{age(r.date)}</span>
+                        </button>
                       </td>
                     );
                   })()}

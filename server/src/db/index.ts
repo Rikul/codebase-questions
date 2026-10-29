@@ -253,6 +253,9 @@ function migrate(db: DB) {
   add('repos', 'history_depth', 'INTEGER');
   add('repos', 'history_shallow', 'INTEGER');
   add('repos', 'history_root', 'TEXT');
+  add('repos', 'history_boundaries', 'TEXT');
+  add('repos', 'history_total', 'INTEGER');
+  add('repos', 'history_capped', 'INTEGER');
   add('symbols', 'end_line', 'INTEGER');
   add('symbols', 'parent', 'TEXT');
   add('symbols', 'signature', 'TEXT');

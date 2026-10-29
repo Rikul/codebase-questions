@@ -3,6 +3,7 @@ import { repoDir } from '../paths.js';
 import { RepoIndex } from '../agent/tools.js';
 import { git, hasGit, safeGitPath, safeSha } from './git.js';
 import type { CommitRow, Unavailable } from './index.js';
+import { historyMeta } from './index.js';
 
 const RS = '\x1e';
 const US = '\x1f';
@@ -12,6 +13,8 @@ export interface SymbolCommit extends CommitRow {
   added: number;
   deleted: number;
   excerpt: string;
+  /** File path at that commit (line history follows renames). */
+  path?: string;
 }
 
 export interface SymbolHistory {
@@ -22,10 +25,18 @@ export interface SymbolHistory {
   range: { start: number; end: number } | null;
   introduced: (CommitRow & { uncertain: boolean; how: 'line-history' | 'pickaxe' }) | null;
   lastChanged: CommitRow | null;
+  /** Up to 60 most recent changes, with diff excerpts. */
   commits: SymbolCommit[];
+  /** All changes found (may exceed `commits.length`). */
+  totalCommits: number;
+  timelineTruncated: boolean;
   authors: { name: string; commits: number }[];
+  /** The repository history itself is incomplete (shallow clone or index cap). */
   truncated: boolean;
 }
+
+const TIMELINE_LIMIT = 60;
+const VALUE_KINDS = new Set(['variable', 'constant']);
 
 function unavailable(db: DB, repoId: string): Unavailable | null {
   const repo = db.prepare('SELECT has_source FROM repos WHERE id=?').get(repoId) as any;
@@ -50,15 +61,14 @@ function parseLogWithPatches(out: string): SymbolCommit[] {
       else if (l.startsWith('-')) deleted++;
     }
     const start = lines.findIndex((l) => l.startsWith('@@'));
-    commits.push({ sha, author, date, subject, added, deleted, excerpt: (start >= 0 ? lines.slice(start, start + 40) : []).join('\n').slice(0, 4000) });
+    const plus = lines.find((l) => l.startsWith('+++ b/'));
+    const minus = lines.find((l) => l.startsWith('--- a/'));
+    const filePath = plus ? plus.slice(6) : minus ? minus.slice(6) : undefined;
+    commits.push({ sha, author, date, subject, added, deleted, path: filePath, excerpt: (start >= 0 ? lines.slice(start, start + 40) : []).join('\n').slice(0, 4000) });
   }
   return commits;
 }
 
-function isShallowRoot(db: DB, repoId: string, sha: string) {
-  const r = db.prepare('SELECT history_shallow, history_root FROM repos WHERE id=?').get(repoId) as any;
-  return Boolean(r?.history_shallow) && r?.history_root === sha;
-}
 
 /** History of a function/class (by its current line range), a selection, or a plain name (pickaxe). */
 export async function symbolHistory(
@@ -78,46 +88,73 @@ export async function symbolHistory(
   if (hit && hit.file_hash === file.hash) return JSON.parse(hit.content);
 
   const dir = repoDir(repoId);
+  const meta = historyMeta(db, repoId);
+  const parseHeaders = (out: string): CommitRow[] =>
+    out
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        const [sha, author, date, subject] = l.split(US);
+        return { sha, author, date, subject };
+      });
+
+  // 1. Line history of the current range: every change (headers only), plus diffs for the most recent ones.
   let commits: SymbolCommit[] = [];
+  let allChanges: CommitRow[] | null = null;
   if (range) {
-    const out = await git(dir, ['log', '-n', '60', HDR, '-L', `${range.start},${range.end}:${path}`], { timeoutMs: 90_000 }).catch(() => '');
-    commits = parseLogWithPatches(out);
+    const L = ['-L', `${range.start},${range.end}:${path}`];
+    const [detail, headers] = await Promise.all([
+      git(dir, ['log', '-n', String(TIMELINE_LIMIT), HDR, ...L], { timeoutMs: 90_000 }).catch(() => ''),
+      git(dir, ['log', '-s', '--format=%H%x1f%an%x1f%aI%x1f%s', ...L], { timeoutMs: 120_000 }).then(parseHeaders, () => null),
+    ]);
+    commits = parseLogWithPatches(detail);
+    allChanges = headers;
   }
-  // Pickaxe: when did this name first appear in the file (works for variables and as a cross-check)?
+
+  // 2. Pickaxe: the first commit that added this name to the file.
   const name = sym?.name ?? req.name?.split('.').pop();
   let firstAppeared: CommitRow | null = null;
   if (name && /^[\w$]+$/.test(name)) {
     const out = await git(dir, ['log', '--reverse', `-S${name}`, '--format=%H%x1f%an%x1f%aI%x1f%s', '--', path], { timeoutMs: 60_000 }).catch(() => '');
-    const first = out.split('\n').find(Boolean);
-    if (first) {
-      const [sha, author, date, subject] = first.split(US);
-      firstAppeared = { sha, author, date, subject };
-    }
+    firstAppeared = parseHeaders(out)[0] ?? null;
     if (!commits.length) {
-      const all = await git(dir, ['log', '-n', '60', `-S${name}`, HDR, '-p', '--', path], { timeoutMs: 60_000 }).catch(() => '');
-      commits = parseLogWithPatches(all);
+      const [detail, headers] = await Promise.all([
+        git(dir, ['log', '-n', String(TIMELINE_LIMIT), `-S${name}`, HDR, '-p', '--', path], { timeoutMs: 60_000 }).catch(() => ''),
+        git(dir, ['log', `-S${name}`, '--format=%H%x1f%an%x1f%aI%x1f%s', '--', path], { timeoutMs: 60_000 }).then(parseHeaders, () => null),
+      ]);
+      commits = parseLogWithPatches(detail);
+      allChanges = headers;
     }
   }
-  const oldest = commits[commits.length - 1];
-  // Line history follows the code even if the name changed; pickaxe gives the first commit with the name.
-  const intro = oldest
-    ? { sha: oldest.sha, author: oldest.author, date: oldest.date, subject: oldest.subject, how: 'line-history' as const }
-    : firstAppeared
-      ? { ...firstAppeared, how: 'pickaxe' as const }
-      : null;
+
+  // 3. Introduction is decided from the complete change list, never from the capped timeline.
+  //    Variables/constants use pickaxe (their current lines may have held other code before);
+  //    functions, classes and selections use line history, which follows the code through renames.
+  const totalCommits = allChanges?.length ?? commits.length;
+  const oldestChange = allChanges?.[allChanges.length - 1] ?? (commits.length < TIMELINE_LIMIT ? commits[commits.length - 1] : undefined);
+  const preferPickaxe = !range || (sym ? VALUE_KINDS.has(sym.kind) : !req.start);
+  let intro: (CommitRow & { how: 'line-history' | 'pickaxe' }) | null = null;
+  if (preferPickaxe && firstAppeared) intro = { ...firstAppeared, how: 'pickaxe' };
+  else if (oldestChange) intro = { sha: oldestChange.sha, author: oldestChange.author, date: oldestChange.date, subject: oldestChange.subject, how: 'line-history' };
+  else if (firstAppeared) intro = { ...firstAppeared, how: 'pickaxe' };
+  // Unknown when the full list could not be computed and the timeline hit its cap.
+  const capUnknown = !allChanges && commits.length >= TIMELINE_LIMIT && intro?.how === 'line-history';
+
   const authors = new Map<string, number>();
-  for (const c of commits) authors.set(c.author, (authors.get(c.author) ?? 0) + 1);
+  for (const c of allChanges ?? commits) authors.set(c.author, (authors.get(c.author) ?? 0) + 1);
   const result: SymbolHistory = {
     available: true,
     path,
     name: sym ? (sym.parent ? `${sym.parent}.${sym.name}` : sym.name) : req.name ?? null,
     kind: sym?.kind ?? null,
     range,
-    introduced: intro ? { ...intro, uncertain: isShallowRoot(db, repoId, intro.sha) } : null,
+    introduced: intro ? { ...intro, uncertain: capUnknown || meta.boundaries.has(intro.sha) } : null,
     lastChanged: commits[0] ? { sha: commits[0].sha, author: commits[0].author, date: commits[0].date, subject: commits[0].subject } : null,
     commits,
+    totalCommits,
+    timelineTruncated: totalCommits > commits.length,
     authors: [...authors].map(([n, c]) => ({ name: n, commits: c })).sort((a, b) => b.commits - a.commits),
-    truncated: Boolean((db.prepare('SELECT history_shallow FROM repos WHERE id=?').get(repoId) as any)?.history_shallow),
+    truncated: meta.truncated,
   };
   db.prepare('INSERT OR REPLACE INTO symbol_history (repo_id, key, file_hash, content) VALUES (?, ?, ?, ?)').run(repoId, key, file.hash, JSON.stringify(result));
   return result;

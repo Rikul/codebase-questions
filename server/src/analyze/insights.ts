@@ -119,7 +119,7 @@ function historyBlock(ctx: RepoContext): string {
   const h = ctx.history;
   if (!h) return '';
   return [
-    `# Git history (${h.commitCount} commits indexed${h.truncated ? ', truncated' : ''}; ${h.firstCommit?.slice(0, 10)} → ${h.lastCommit?.slice(0, 10)})`,
+    `# Git history (${h.commitCount} of ${h.totalCommits} commits indexed${h.shallow ? ', shallow clone: older history not fetched' : ''}; ${h.firstCommit?.slice(0, 10)} → ${h.lastCommit?.slice(0, 10)})`,
     `Top authors: ${h.authors.map((a: any) => `${a.author} (${a.n})`).join(', ')}`,
     `Most-changed files: ${h.hotspots.map((x: any) => `${x.path} (${x.n} commits)`).join(', ')}`,
     `Recent commits:\n${h.recent.map((c) => `- ${c.sha.slice(0, 8)} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}`).join('\n')}`,
@@ -217,7 +217,7 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
         kind: 'history',
         title: 'Project history & hotspots',
         bodyMd: [
-          `${h.commitCount} commits${h.truncated ? ' (most recent, history truncated)' : ''} from ${h.firstCommit?.slice(0, 10)} to ${h.lastCommit?.slice(0, 10)}.`,
+          `${h.capped ? `The most recent ${h.commitCount} of ${h.totalCommits} commits` : `${h.commitCount} commits`}${h.shallow ? ' (shallow clone: older history was not fetched)' : ''} from ${h.firstCommit?.slice(0, 10)} to ${h.lastCommit?.slice(0, 10)}.`,
           `\n\n**Top contributors:** ${h.authors.slice(0, 5).map((a: any) => `${a.author} (${a.n})`).join(', ')}.`,
           `\n\n**Most frequently changed files** (often the core or the riskiest code):\n\n${h.hotspots.slice(0, 8).map((x: any) => `- \`${x.path}\` — ${x.n} commits`).join('\n')}`,
           `\n\n**Recent changes:**\n\n${h.recent.slice(0, 6).map((c) => `- \`${c.sha.slice(0, 7)}\` ${c.date.slice(0, 10)} · ${c.author}: ${c.subject}`).join('\n')}`,

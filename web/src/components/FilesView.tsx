@@ -46,10 +46,16 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
     setBlameData(null);
     setBlameNote(null);
     if (!blameOn || !path) return;
+    let active = true; // ignore responses for a file the user has already left
     api<any>(`/repos/${repo.id}/blame?path=${encodeURIComponent(path)}`).then(
-      (r) => (r.available ? setBlameData(r.ranges) : setBlameNote(r.reason)),
-      (e) => setBlameNote(e.message),
+      (r) => {
+        if (active) r.available ? setBlameData(r.ranges) : setBlameNote(r.reason);
+      },
+      (e) => active && setBlameNote(e.message),
     );
+    return () => {
+      active = false;
+    };
   }, [blameOn, path, repo.id]);
 
   useEffect(() => {
@@ -68,8 +74,18 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
     setFile(null);
     const parts = path.split('/');
     setOpen((o) => new Set([...o, ...parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))]));
-    api<any>(`/repos/${repo.id}/files?path=${encodeURIComponent(path)}`).then(setFile, () => setFile({ error: true }));
-    api<string[]>(`/repos/${repo.id}/identifiers?path=${encodeURIComponent(path)}`).then((l) => setIdents(new Set(l)), () => setIdents(new Set()));
+    let active = true;
+    api<any>(`/repos/${repo.id}/files?path=${encodeURIComponent(path)}`).then(
+      (f) => active && setFile(f),
+      () => active && setFile({ error: true }),
+    );
+    api<string[]>(`/repos/${repo.id}/identifiers?path=${encodeURIComponent(path)}`).then(
+      (l) => active && setIdents(new Set(l)),
+      () => active && setIdents(new Set()),
+    );
+    return () => {
+      active = false;
+    };
   }, [repo.id, path]);
 
   const selectFile = (p: string) => {
@@ -106,7 +122,7 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
               {file.meta?.history && (
                 <div className="small muted hist-line">
                   {file.meta.history.uncertain ? 'Created on or before ' : 'Created '}
-                  <button className="plain-btn link" onClick={() => openCommit(file.meta.history.createdSha, file.path)}>{String(file.meta.history.createdAt).slice(0, 10)}</button> by {file.meta.history.createdBy}
+                  <button className="plain-btn link" onClick={() => openCommit(file.meta.history.createdSha, file.meta.history.createdPath ?? file.path)}>{String(file.meta.history.createdAt).slice(0, 10)}</button> by {file.meta.history.createdBy}
                   {' · '}last changed{' '}
                   <button className="plain-btn link" onClick={() => openCommit(file.meta.history.lastSha, file.path)}>{String(file.meta.history.lastAt).slice(0, 10)}</button> by {file.meta.history.lastBy}
                   {' · '}{file.meta.history.commits} commit{file.meta.history.commits === 1 ? '' : 's'}

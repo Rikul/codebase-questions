@@ -34,6 +34,8 @@ function Section({ title, count, children, defaultOpen = true }: { title: string
 
 interface HistCommit {
   sha: string;
+  /** File path at that commit (differs from today's path before a rename). */
+  path?: string;
   author: string;
   date: string;
   subject: string;
@@ -55,7 +57,7 @@ type HistoryData =
       truncated: boolean;
     };
 
-function HistorySection({ data, narrative, onCommit }: { data: HistoryData | null; narrative?: { created: string; evolution: string; keyCommits: { sha: string; date?: string; why: string }[] }; onCommit: (sha: string) => void }) {
+function HistorySection({ data, narrative, onCommit }: { data: HistoryData | null; narrative?: { created: string; evolution: string; keyCommits: { sha: string; date?: string; why: string }[] }; onCommit: (sha: string, path?: string) => void }) {
   const [all, setAll] = useState(false);
   if (!data) return <div className="muted small"><span className="spinner" /> Loading history…</div>;
   if (!data.available) return <div className="muted small">{data.reason}</div>;
@@ -66,14 +68,14 @@ function HistorySection({ data, narrative, onCommit }: { data: HistoryData | nul
     <div className="history">
       <div className="hist-facts">
         {first && (
-          <button className="hist-fact" onClick={() => onCommit(first.sha)} title={first.subject}>
+          <button className="hist-fact" onClick={() => onCommit(first.sha, first.path)} title={first.subject}>
             <span className="k">{data.introduced?.how === 'pickaxe' ? 'First appeared' : 'Created'}</span>
             <span className="v">{first.uncertain ? '≤ ' : ''}{first.date.slice(0, 10)}</span>
             <span className="s">{first.author} · <code className="plain">{first.sha.slice(0, 7)}</code></span>
           </button>
         )}
         {data.lastChanged && (
-          <button className="hist-fact" onClick={() => onCommit(data.lastChanged!.sha)} title={data.lastChanged.subject}>
+          <button className="hist-fact" onClick={() => onCommit(data.lastChanged!.sha, data.lastChanged!.path)} title={data.lastChanged.subject}>
             <span className="k">Last changed</span>
             <span className="v">{data.lastChanged.date.slice(0, 10)}</span>
             <span className="s">{data.lastChanged.author} · {timeAgo(data.lastChanged.date)}</span>
@@ -94,7 +96,7 @@ function HistorySection({ data, narrative, onCommit }: { data: HistoryData | nul
           {narrative.keyCommits.length > 0 && (
             <div className="refs">
               {narrative.keyCommits.slice(0, 6).map((k) => (
-                <button key={k.sha} className="cite" title={k.why} onClick={() => onCommit(k.sha)}>{k.sha.slice(0, 7)}</button>
+                <button key={k.sha} className="cite" title={k.why} onClick={() => onCommit(k.sha, data.commits.find((c) => c.sha.startsWith(k.sha) || k.sha.startsWith(c.sha))?.path)}>{k.sha.slice(0, 7)}</button>
               ))}
             </div>
           )}
@@ -103,7 +105,7 @@ function HistorySection({ data, narrative, onCommit }: { data: HistoryData | nul
       <ol className="timeline">
         {list.map((c) => (
           <li key={c.sha}>
-            <button className="plain-btn" onClick={() => onCommit(c.sha)}>
+            <button className="plain-btn" onClick={() => onCommit(c.sha, c.path)} title={c.path && data.commits[0]?.path && c.path !== data.commits[0].path ? `as ${c.path}` : undefined}>
               <span className="mono small muted">{c.date.slice(0, 10)}</span>
               <span className="grow tl-subject">{c.subject}</span>
               {c.status && c.status !== 'M' && <span className={`chip st-${c.status}`}>{c.status === 'A' ? 'added' : c.status === 'R' ? 'renamed' : c.status === 'D' ? 'deleted' : c.status}</span>}
@@ -231,7 +233,7 @@ export function ExplainPanel({
         {running && narration && <div className="muted small narration">{narration}</div>}
         {!x && history?.available && (
           <Section title="When was it created & how has it changed?" count={history.commitCount ?? history.commits.length}>
-            <HistorySection data={history} onCommit={(sha) => openCommit(sha, target?.path)} />
+            <HistorySection data={history} onCommit={(sha, p) => openCommit(sha, p ?? target?.path)} />
           </Section>
         )}
         {error && <div className="error-box">{error}</div>}
@@ -250,7 +252,7 @@ export function ExplainPanel({
               </Section>
             ))}
             <Section title="When was it created & how has it changed?" count={history?.available ? history.commitCount ?? history.commits.length : undefined}>
-              <HistorySection data={history} narrative={x.history} onCommit={(sha) => openCommit(sha, target?.path)} />
+              <HistorySection data={history} narrative={x.history} onCommit={(sha, p) => openCommit(sha, p ?? target?.path)} />
             </Section>
             <Section title="What does it contain?" count={x.contains.length}>
               {x.contains.length ? (

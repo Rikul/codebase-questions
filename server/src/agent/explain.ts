@@ -34,6 +34,7 @@ Answer five questions and submit them with submit_explanation:
 3. whenUsed — when it runs or is loaded: at startup, on which HTTP routes, from which jobs/CLI commands, only in tests, at build time. Use importer_chain and file_info, and follow callers upward.
 4. contains — its important functions/classes/variables (for a symbol: key parameters, fields or internal steps).
 5. callers and callees — who calls/uses it and what it calls. Verify callers with find_references and callees with symbol_calls or by reading the code; do not guess. Include external libraries as callees (path = package name).
+6. history — when it was created and how it evolved: call file_history (files) or symbol_history (functions/classes/selections), and commit_details on the 1-3 most significant commits to explain WHY it changed. Omit history if the tools report no git history.
 
 Rules: read the target code first. Keep each prose field short (2-5 sentences, markdown allowed) and cite code as [path:start-end]. Put each caller/callee in its list, not in the prose. If something cannot be determined (dynamic dispatch, reflection, string-based routing), say so.`;
 
@@ -92,6 +93,41 @@ function startingContext(ix: RepoIndex, target: ExplainTarget, symbol: SymbolRow
 
 /** Offline investigation: the same tools, composed deterministically. */
 async function scripted(call: ToolCaller, target: ExplainTarget, symbol: SymbolRow | undefined): Promise<Explanation> {
+  const base = await scriptedBase(call, target, symbol);
+  return { ...base, history: await scriptedHistory(call, target, symbol) };
+}
+
+const short = (sha: string) => sha.slice(0, 7);
+const day = (d: string) => d.slice(0, 10);
+
+async function scriptedHistory(call: ToolCaller, target: ExplainTarget, symbol: SymbolRow | undefined): Promise<Explanation['history']> {
+  try {
+    if (target.kind === 'file') {
+      const h = await call('file_history', { path: target.path });
+      if (typeof h === 'string' || !h.created) return undefined;
+      const c = h.created;
+      return {
+        created: `${c.uncertain ? 'Created on or before' : 'Created'} ${day(c.date)} by **${c.author}** in \`${short(c.sha)}\` — “${c.subject}”.${h.renames.length ? ` Renamed ${h.renames.length} time(s), originally \`${h.renames[h.renames.length - 1].from}\`.` : ''}`,
+        evolution: `Changed in ${h.commitCount} commit(s) by ${h.authors.slice(0, 3).map((a: any) => a.name).join(', ')}. Last change ${day(h.lastChanged.date)} by ${h.lastChanged.author}: “${h.lastChanged.subject}”.`,
+        keyCommits: h.commits.slice(0, 5).map((x: any) => ({ sha: x.sha, date: x.date, why: x.subject })),
+      };
+    }
+    const args = target.kind === 'snippet' ? { path: target.path, start_line: target.line, end_line: target.endLine } : { path: target.path, name: target.name ?? symbol?.name };
+    const h = await call('symbol_history', args);
+    if (typeof h === 'string' || !h.introduced) return undefined;
+    const i = h.introduced;
+    const what = target.kind === 'snippet' ? 'These lines were introduced' : `\`${h.name ?? target.name}\` was ${i.how === 'pickaxe' ? 'first mentioned' : 'introduced'}`;
+    return {
+      created: `${what} ${i.uncertain ? 'on or before' : 'on'} ${day(i.date)} by **${i.author}** in \`${short(i.sha)}\` — “${i.subject}”.`,
+      evolution: h.commits.length > 1 ? `Modified in ${h.commits.length - 1} later commit(s); most recently ${day(h.lastChanged.date)} by ${h.lastChanged.author}: “${h.lastChanged.subject}”.` : 'Unchanged since it was introduced.',
+      keyCommits: h.commits.slice(0, 5).map((x: any) => ({ sha: x.sha, date: x.date, why: `${x.subject} (+${x.added}/−${x.deleted})` })),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function scriptedBase(call: ToolCaller, target: ExplainTarget, symbol: SymbolRow | undefined): Promise<Explanation> {
   const info = await call('file_info', { path: target.path });
   const outline: SymbolRow[] = await call('list_symbols', { path: target.path });
   const chainsRaw = await call('importer_chain', { path: target.path });

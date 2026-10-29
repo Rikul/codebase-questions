@@ -187,6 +187,39 @@ CREATE TABLE IF NOT EXISTS diagram_answers (
   PRIMARY KEY (repo_id, question)
 );
 
+CREATE TABLE IF NOT EXISTS commits (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  sha TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  author TEXT NOT NULL,
+  email_hash TEXT,
+  date TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body TEXT,
+  PRIMARY KEY (repo_id, sha)
+);
+CREATE INDEX IF NOT EXISTS commits_seq ON commits(repo_id, seq);
+
+CREATE TABLE IF NOT EXISTS file_commits (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  status TEXT NOT NULL,
+  old_path TEXT,
+  added INTEGER,
+  deleted INTEGER
+);
+CREATE INDEX IF NOT EXISTS file_commits_path ON file_commits(repo_id, path);
+CREATE INDEX IF NOT EXISTS file_commits_sha ON file_commits(repo_id, sha);
+
+CREATE TABLE IF NOT EXISTS symbol_history (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  file_hash TEXT NOT NULL,
+  content TEXT NOT NULL,
+  PRIMARY KEY (repo_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS auth_codes (
   hash TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -217,6 +250,9 @@ function migrate(db: DB) {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
     if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
   };
+  add('repos', 'history_depth', 'INTEGER');
+  add('repos', 'history_shallow', 'INTEGER');
+  add('repos', 'history_root', 'TEXT');
   add('symbols', 'end_line', 'INTEGER');
   add('symbols', 'parent', 'TEXT');
   add('symbols', 'signature', 'TEXT');
@@ -237,7 +273,7 @@ export function json<T>(v: string | null | undefined, fallback: T): T {
 /** Remove all derived analysis for a repo (keeps the repo row, jobs and conversations). */
 export function clearAnalysis(db: DB, repoId: string) {
   const tx = db.transaction(() => {
-    for (const t of ['file_edges', 'symbols', 'refs', 'chunks', 'components', 'connections', 'insights', 'suggested_questions', 'flows', 'diagram_answers']) {
+    for (const t of ['file_edges', 'symbols', 'refs', 'chunks', 'components', 'connections', 'insights', 'suggested_questions', 'flows', 'diagram_answers', 'commits', 'file_commits', 'symbol_history']) {
       db.prepare(`DELETE FROM ${t} WHERE repo_id = ?`).run(repoId);
     }
   });

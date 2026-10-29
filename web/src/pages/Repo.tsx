@@ -8,6 +8,7 @@ import { RepoContext } from '../lib/repoContext';
 import { ArchDiagram } from '../components/ArchDiagram';
 import { Chat } from '../components/Chat';
 import { CodeModal, type CodeTarget } from '../components/CodeModal';
+import { CommitModal } from '../components/CommitModal';
 import { FilesView } from '../components/FilesView';
 import { InsightsView } from '../components/InsightsView';
 import { useJobProgress } from './Home';
@@ -24,7 +25,7 @@ type TabId = (typeof TABS)[number]['id'];
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const stages = ['clone', 'scan', 'parse', 'index', 'summarize', 'architecture', 'insights', 'store', 'flows'];
+  const stages = ['clone', 'scan', 'parse', 'index', 'history', 'summarize', 'architecture', 'insights', 'store', 'flows'];
   const cur = stages.indexOf(ev?.stage ?? '');
   return (
     <div className="page" style={{ maxWidth: 640 }}>
@@ -34,7 +35,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save', 'Trace key flows'].map((s, i) => (
+          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Index git history', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save', 'Trace key flows'].map((s, i) => (
             <li key={s} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{s}</li>
           ))}
         </ol>
@@ -54,6 +55,7 @@ export function Repo() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSymbol, setFileSymbol] = useState<{ name?: string; line?: number } | null>(null);
   const [menu, setMenu] = useState(false);
+  const [commit, setCommit] = useState<{ sha: string; path?: string } | null>(null);
 
   const load = useCallback(() => api<RepoSummary>(`/repos/${id}`).then(setRepo, (e) => setError(e.message)), [id]);
   useEffect(() => {
@@ -70,6 +72,7 @@ export function Repo() {
           setIntent(i);
           setTab('ask');
         },
+        openCommit: (sha, path) => setCommit({ sha, path }),
         openFile: (p, symbol) => {
           setCode(null);
           setFilePath(p);
@@ -145,6 +148,7 @@ export function Repo() {
           </>
         )}
         {code && <CodeModal repoId={repo.id} target={code} onClose={() => setCode(null)} onOpenFile={(p, sym) => ctx.openFile(p, sym)} />}
+        {commit && <CommitModal sha={commit.sha} path={commit.path} onClose={() => setCommit(null)} />}
       </div>
     </RepoContext.Provider>
   );

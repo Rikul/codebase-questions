@@ -17,6 +17,8 @@ import { buildImportGraph, centrality, groupModules, moduleEdges, moduleOf } fro
 import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
 import type { FileFacts } from './parse.js';
 import { buildRefs } from './refs.js';
+import type { HistoryInfo } from '../history/git.js';
+import { indexHistory, repoHistorySummary, storeFileHistorySummaries } from '../history/index.js';
 import { repoDir } from '../paths.js';
 import { analyzeFlows, saveFlows } from '../analyze/flows.js';
 import { RepoIndex } from '../agent/tools.js';
@@ -110,9 +112,9 @@ export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProv
   try {
     const dir = repoDir(repoId);
     emit('clone', `Cloning ${repo.url}`, 0.02);
-    const { commit } = await cloneRepo(parseRepoUrl(repo.url), dir);
+    const { commit, history } = await cloneRepo(parseRepoUrl(repo.url), dir);
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
-    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w));
+    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w), history);
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
     emit('done', warnings.length ? `Ready (with ${warnings.length} warning(s))` : 'Ready', 1, { done: true });
@@ -134,6 +136,7 @@ export async function analyzeDirectory(
   dir: string,
   progress: (stage: string, message: string, fraction: number) => void,
   warn: (msg: string) => void = () => undefined,
+  history: HistoryInfo | null = null,
 ): Promise<{ architecture: Architecture }> {
   const repo = db.prepare('SELECT name FROM repos WHERE id=?').get(repoId) as { name: string };
   progress('scan', 'Scanning files', 0.0);
@@ -225,6 +228,17 @@ export async function analyzeDirectory(
   }
 
   ctx.index = new RepoIndex(db, repoId, embeddings);
+  if (history) {
+    progress('history', 'Indexing git history', 0.22);
+    try {
+      const { commits } = await indexHistory(db, repoId, dir, history, config.ingest.historyIndexCommits);
+      storeFileHistorySummaries(db, repoId);
+      progress('history', `Indexed ${commits} commits`, 0.24);
+    } catch (err) {
+      warn(`History indexing failed: ${(err as Error).message}`);
+    }
+  }
+  ctx.history = repoHistorySummary(db, repoId);
   progress('summarize', 'Summarizing key files', 0.25);
   ctx.progress = (m, p) => progress('summarize', m, 0.25 + 0.35 * p);
   const fromModel = await summarizeFiles(ctx, { max: config.ingest.maxLlmFiles, concurrency: config.llm.concurrency, cached });

@@ -3,6 +3,8 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config.js';
+import { finalizeHistory, gitEnv } from '../history/git.js';
+import type { HistoryInfo } from '../history/git.js';
 
 const run = promisify(execFile);
 
@@ -65,24 +67,22 @@ function dirSizeMb(dir: string): number {
     const d = stack.pop()!;
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, e.name);
-      if (e.isDirectory()) stack.push(p);
+      if (e.isDirectory() && e.name !== '.git') stack.push(p);
       else if (e.isFile()) total += fs.statSync(p).size;
     }
   }
   return total / 1024 / 1024;
 }
 
-export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commit: string }> {
+export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commit: string; history: HistoryInfo | null }> {
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  // Inherit proxy/CA settings but drop interactive credential helpers: auth comes only from GITHUB_TOKEN.
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^(GIT_ASKPASS|SSH_ASKPASS|GIT_SSH_COMMAND|GIT_EDITOR|GIT_PAGER)$/.test(k)) env[k] = v;
-  }
-  Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1' });
+  // Auth comes only from GITHUB_TOKEN; interactive credential helpers are dropped (see gitEnv).
+  const env = gitEnv();
+  const depth = config.ingest.historyDepth;
   // execFile (no shell) with a fixed argument list; `--` stops option parsing before the URL.
-  const args = ['-c', 'core.symlinks=false', 'clone', '--depth', '1', '--single-branch', '--no-tags'];
+  const args = ['-c', 'core.symlinks=false', 'clone', '--single-branch', '--no-tags'];
+  if (depth !== 0) args.push('--depth', String(depth > 0 ? depth : 1));
   if (p.branch) args.push('--branch', p.branch);
   args.push('--', authedUrl(p), dest);
   try {
@@ -96,12 +96,17 @@ export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commi
   }
   const { stdout } = await run('git', ['-C', dest, 'rev-parse', 'HEAD'], { env });
   const commit = stdout.trim();
-  // Drop .git: it holds the credentialed remote and is not needed for analysis.
-  fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
+  let history: HistoryInfo | null = null;
+  if (depth < 0) {
+    // History disabled: drop .git entirely (it holds the credentialed remote).
+    fs.rmSync(path.join(dest, '.git'), { recursive: true, force: true });
+  } else {
+    history = await finalizeHistory(dest, p.url, depth);
+  }
   const size = dirSizeMb(dest);
   if (size > config.ingest.maxRepoMb) {
     fs.rmSync(dest, { recursive: true, force: true });
     throw new Error(`Repository is ${size.toFixed(0)} MB which exceeds MAX_REPO_MB=${config.ingest.maxRepoMb}`);
   }
-  return { commit };
+  return { commit, history };
 }

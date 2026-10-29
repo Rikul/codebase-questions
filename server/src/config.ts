@@ -48,6 +48,10 @@ export const config = {
     maxRepoFiles: num('MAX_REPO_FILES', 20_000),
     maxRepoMb: num('MAX_REPO_MB', 500),
     cloneTimeoutMs: num('CLONE_TIMEOUT_MS', 5 * 60_000),
+    /** Commits of git history to keep: 0 = full history, -1 = none (shallow snapshot only). */
+    historyDepth: num('HISTORY_DEPTH', 1000),
+    /** Max commits indexed for file timelines. */
+    historyIndexCommits: num('HISTORY_INDEX_COMMITS', 5000),
   },
   auth: {
     /** Set AUTH_DISABLED=true only for local development behind a trusted network. */

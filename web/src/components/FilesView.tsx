@@ -38,6 +38,19 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
   const [idents, setIdents] = useState<Set<string>>(new Set());
   const [subject, setSubject] = useState<ExplainSubject | null>(initialPath ? { path: initialPath, symbol: initialSymbol ?? undefined } : null);
   const [showExplain, setShowExplain] = useState(true);
+  const [blameOn, setBlameOn] = useState(false);
+  const [blameData, setBlameData] = useState<any[] | null>(null);
+  const [blameNote, setBlameNote] = useState<string | null>(null);
+  const { openCommit } = useRepo();
+  useEffect(() => {
+    setBlameData(null);
+    setBlameNote(null);
+    if (!blameOn || !path) return;
+    api<any>(`/repos/${repo.id}/blame?path=${encodeURIComponent(path)}`).then(
+      (r) => (r.available ? setBlameData(r.ranges) : setBlameNote(r.reason)),
+      (e) => setBlameNote(e.message),
+    );
+  }, [blameOn, path, repo.id]);
 
   useEffect(() => {
     api<FileNode>(`/repos/${repo.id}/files`).then((t) => {
@@ -85,8 +98,21 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
             <div className="file-meta">
               <div className="row">
                 <h3 className="grow" style={{ fontFamily: 'var(--mono)', fontSize: 15, wordBreak: 'break-all' }}>{file.path}</h3>
+                <button className={`btn sm ${blameOn ? 'primary' : ''}`} onClick={() => setBlameOn((b) => !b)} title="Show who last changed each line">
+                  {blameOn ? '✓ Blame' : 'Blame'}
+                </button>
                 {!showExplain && <button className="btn sm" onClick={() => { setShowExplain(true); setSubject({ path: file.path }); }}>✦ Explain</button>}
               </div>
+              {file.meta?.history && (
+                <div className="small muted hist-line">
+                  {file.meta.history.uncertain ? 'Created on or before ' : 'Created '}
+                  <button className="plain-btn link" onClick={() => openCommit(file.meta.history.createdSha, file.path)}>{String(file.meta.history.createdAt).slice(0, 10)}</button> by {file.meta.history.createdBy}
+                  {' · '}last changed{' '}
+                  <button className="plain-btn link" onClick={() => openCommit(file.meta.history.lastSha, file.path)}>{String(file.meta.history.lastAt).slice(0, 10)}</button> by {file.meta.history.lastBy}
+                  {' · '}{file.meta.history.commits} commit{file.meta.history.commits === 1 ? '' : 's'}
+                </div>
+              )}
+              {blameNote && <div className="small muted">{blameNote}</div>}
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 {file.meta?.isEntry && <span className="chip">entry point</span>}
                 {file.meta?.isTest && <span className="chip">test</span>}
@@ -106,6 +132,8 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
               title={`${file.content.split('\n').length} lines · ${file.lang ?? 'text'}`}
               identifiers={idents}
               activeLine={activeLine}
+              blame={blameOn ? blameData : null}
+              onBlameClick={(sha) => openCommit(sha, file.path)}
               onIdentifierClick={(name, line) => onSubject({ path: file.path, symbol: { name, line } })}
               onExplainSelection={(sel) => onSubject({ path: file.path, snippet: sel })}
             />

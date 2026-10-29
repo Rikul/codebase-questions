@@ -406,3 +406,38 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 /* Grid rows size to content (scrollable children must not shrink), and columns may not grow past the panel. */
 .panel-body, .flow-main, .insights-inner { grid-auto-rows: max-content; grid-template-columns: minmax(0, 1fr); }
 .seq-wrap { overflow-x: auto; overflow-y: hidden; }
+
+/* ---------- history ---------- */
+.history { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+.hist-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.hist-fact { display: grid; gap: 1px; text-align: left; border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; padding: 7px 9px; cursor: pointer; color: var(--text); min-width: 0; }
+.hist-fact.static { cursor: default; }
+.hist-fact:not(.static):hover { border-color: var(--accent); }
+.hist-fact .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); font-weight: 700; }
+.hist-fact .v { font-weight: 650; font-size: 13.5px; }
+.hist-fact .s { font-size: 11.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline { list-style: none; margin: 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); display: grid; gap: 2px; }
+.timeline li { position: relative; }
+.timeline li::before { content: ''; position: absolute; left: -15px; top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.timeline .plain-btn { display: flex; gap: 8px; align-items: center; width: 100%; padding: 4px 6px; border-radius: 6px; }
+.timeline .plain-btn:hover { background: var(--surface-2); }
+.tl-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.diffstat .plus { color: var(--ok); } .diffstat .minus { color: var(--danger); }
+.chip.st-A { color: var(--ok); } .chip.st-D { color: var(--danger); } .chip.st-R { color: var(--accent); }
+.hist-line .link { color: var(--accent); }
+.hist-line .link:hover { text-decoration: underline; }
+.commit-body { margin: 0; white-space: pre-wrap; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; max-height: 180px; overflow: auto; }
+.link-row.active-row { background: var(--accent-soft); }
+.code-table tr.add { background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.code-table tr.del { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.code-table tr.hunk td { color: var(--accent); }
+.code-table td.blame { width: 1%; min-width: 74px; padding: 0 6px; font-size: 11px; color: var(--text-3); border-right: 1px solid var(--border); user-select: none; white-space: nowrap; }
+.code-table td.blame.start { cursor: pointer; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--accent) calc(var(--age, 0) * 22%), transparent); }
+.code-table td.blame.start:hover { color: var(--accent); }
+.code-table td.blame .who { font-weight: 700; color: var(--text-2); margin-right: 6px; }
+@media (max-width: 860px) { .hist-facts { grid-template-columns: 1fr; } }
+
+.files { min-width: 0; }
+.files .file-view { flex: 1 1 0; }
+.files .panel { flex: none; }
+.files-changed summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin-bottom: 6px; }

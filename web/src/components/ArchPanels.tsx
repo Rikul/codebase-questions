@@ -105,7 +105,8 @@ export function ComponentPanel({
 }) {
   const { repo, askAbout, openCode, openFile } = useRepo();
   const myFlows = flows.filter((f) => f.participants.some((p) => p.componentId === comp.id));
-  const [files, setFiles] = useState<{ path: string; summary: string | null; lines: number }[] | null>(null);
+  const [files, setFiles] = useState<{ path: string; summary: string | null; lines: number; history?: { lastAt?: string; lastBy?: string; lastSha?: string; commits?: number } | null }[] | null>(null);
+  const { openCommit } = useRepo();
   useEffect(() => {
     setFiles(null);
     api<{ files: any[] }>(`/repos/${repo.id}/components/${encodeURIComponent(comp.id)}`).then((r) => setFiles(r.files), () => setFiles([]));
@@ -149,6 +150,34 @@ export function ComponentPanel({
         </section>
       ) : null}
       <FlowLinks flows={myFlows} onOpenFlow={onOpenFlow} />
+      {files?.some((f) => f.history) && (() => {
+        const withH = files.filter((f) => f.history?.lastAt);
+        const recent = [...withH].sort((a, b) => String(b.history!.lastAt).localeCompare(String(a.history!.lastAt))).slice(0, 5);
+        const hot = [...withH].sort((a, b) => (b.history!.commits ?? 0) - (a.history!.commits ?? 0)).slice(0, 5);
+        return (
+          <section>
+            <h4>History</h4>
+            <div className="muted small" style={{ marginBottom: 4 }}>Recently changed</div>
+            <div className="link-list">
+              {recent.map((f) => (
+                <div key={f.path} className="link-row">
+                  <button className="grow plain-btn mono small" onClick={() => openCode(f.path)}>{f.path.split('/').slice(-2).join('/')}</button>
+                  <button className="plain-btn small muted" onClick={() => f.history?.lastSha && openCommit(f.history.lastSha, f.path)}>{String(f.history!.lastAt).slice(0, 10)}</button>
+                </div>
+              ))}
+            </div>
+            <div className="muted small" style={{ margin: '8px 0 4px' }}>Hotspots (most commits)</div>
+            <div className="link-list">
+              {hot.map((f) => (
+                <div key={f.path} className="link-row">
+                  <button className="grow plain-btn mono small" onClick={() => openFile(f.path)}>{f.path.split('/').slice(-2).join('/')}</button>
+                  <span className="chip">{f.history!.commits} commits</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })()}
       <section>
         <h4>Ask about {comp.name}</h4>
         <div className="suggest">

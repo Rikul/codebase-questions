@@ -1,10 +1,14 @@
 {
   "name": "codebase-questions",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "description": "Inject any Git repository and ask questions about its architecture, onboarding, security and API usage.",
   "type": "module",
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w server\" \"npm run dev -w web\"",
     "build": "npm run build -w web && npm run build -w server",
@@ -17,5 +21,7 @@
     "concurrently": "^9.2.1",
     "typescript": "5.9.3"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

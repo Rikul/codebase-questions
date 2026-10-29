@@ -40,7 +40,7 @@ class Channel<T> implements AsyncIterable<T> {
 
 const KEYWORDS: Record<Category, RegExp> = {
   architecture: /\b(architect\w*|design|component|module|layer|structure|interact\w*|flow|depend\w*|coupl\w*|diagram|system|microservice|data ?flow|talks? to|communicat\w*|pattern)\b/gi,
-  onboarding: /\b(start|setup|set up|install|run|build|onboard\w*|new (engineer|developer)|where (do|should) i|read first|getting started|convention|test(s|ing)?|debug|contribut\w*|local(ly)?|overview|what does|explain)\b/gi,
+  onboarding: /\b(history|introduced|added|created|changed|who wrote|blame|commit\w*|when was|start|setup|set up|install|run|build|onboard\w*|new (engineer|developer)|where (do|should) i|read first|getting started|convention|test(s|ing)?|debug|contribut\w*|local(ly)?|overview|what does|explain)\b/gi,
   security: /\b(secur\w*|vuln\w*|attack|exploit|auth\w*|permission|xss|csrf|sql ?injection|injection|sanitiz\w*|secrets?|tokens?|passwords?|hash\w*|crypt\w*|cve|threat|ssrf|rce|cors|privilege|leak)\b/gi,
   api: /\b(api|sdk|library|libraries|endpoint|interface|integrat\w*|call|client|import|usage|example|parameter|signature|runtime|behaviou?r|retry|async|return|exception|hook)\b/gi,
 };
@@ -201,8 +201,9 @@ export async function* answerQuestion(
     messages: [...history, { role: 'user', content: `${context}\n\n---\n\nQuestion: ${question}` }],
     tools: repoTools(ix),
     onEvent: mapper,
-    scripted: async (_call, emitText) => {
-      emitText(mock());
+    scripted: async (call, emitText) => {
+      const hist = HISTORY_Q.test(question) ? await historyAnswer(db, repoId, question, req.focus, call).catch(() => null) : null;
+      emitText(hist ?? mock());
       return {};
     },
   })
@@ -221,6 +222,53 @@ export async function* answerQuestion(
     db.prepare('INSERT INTO messages (conversation_id, role, content, category, citations) VALUES (?, ?, ?, ?, ?)').run(conversationId, 'assistant', full, category, JSON.stringify(citations)).lastInsertRowid,
   );
   yield { type: 'done', messageId, citations };
+}
+
+const HISTORY_Q = /\b(when (was|were|did)|who (wrote|added|created|changed)|introduced|history|first (added|appeared)|created|last changed|blame)\b/i;
+
+/** Offline answer to "when was X added / who changed Y" using the git history tools. */
+async function historyAnswer(db: DB, repoId: string, question: string, focus: AskRequest['focus'], call: (n: string, i: Record<string, unknown>) => Promise<any>): Promise<string | null> {
+  const day = (d: string) => String(d).slice(0, 10);
+  const short = (s: string) => String(s).slice(0, 7);
+  // Which symbol or file is the question about? Prefer the focus, then names mentioned in the question.
+  let target: { path: string; name?: string } | null = focus?.path ? { path: focus.path, name: focus.symbol?.name } : null;
+  if (!target?.name) {
+    const words = [...new Set(question.match(/[A-Za-z_$][\w$]{2,}/g) ?? [])];
+    const hits = words.length
+      ? (db.prepare(`SELECT path, name, kind FROM symbols WHERE repo_id=? AND name IN (${words.map(() => '?').join(',')}) AND kind != 'route'`).all(repoId, ...words) as any[])
+      : [];
+    const isTest = (p: string) => /(^|\/)(tests?|__tests__|spec|e2e)\//.test(p) || /\.(test|spec)\./.test(p);
+    const hit = hits.sort((a, b) => Number(isTest(a.path)) - Number(isTest(b.path)) || (a.kind === 'function' ? -1 : 1))[0];
+    if (hit) target = { path: hit.path, name: hit.name };
+    else if (!target) {
+      const file = words.length ? (db.prepare(`SELECT path FROM files WHERE repo_id=? AND (${words.map(() => 'path LIKE ?').join(' OR ')}) ORDER BY length(path) LIMIT 1`).get(repoId, ...words.map((w) => `%${w}%`)) as any) : null;
+      if (file) target = { path: file.path };
+    }
+  }
+  if (!target) return null;
+  const head = '> _Offline mode: answered from git history without an LLM._\n\n';
+  if (target.name) {
+    const h = await call('symbol_history', { path: target.path, name: target.name });
+    if (typeof h === 'string' || !h.introduced) return null;
+    const i = h.introduced;
+    return (
+      head +
+      `**\`${h.name ?? target.name}\`** in \`${target.path}\` was ${i.how === 'pickaxe' ? 'first added' : 'introduced'} ${i.uncertain ? 'on or before' : 'on'} **${day(i.date)}** by **${i.author}** in \`${short(i.sha)}\` — “${i.subject}”.` +
+      (h.commits.length > 1
+        ? `\n\nIt has changed in ${h.commits.length - 1} later commit(s):\n\n${h.commits.slice(0, -1).slice(0, 8).map((c: any) => `- ${day(c.date)} · ${c.author} · \`${short(c.sha)}\` — ${c.subject} (+${c.added}/−${c.deleted})`).join('\n')}`
+        : '\n\nIt has not changed since.') +
+      (i.uncertain ? '\n\n_History is truncated, so it may be older. Set HISTORY_DEPTH=0 for full history._' : '') +
+      (h.range ? `\n\nCode: [${target.path}:${h.range.start}-${h.range.end}]` : '')
+    );
+  }
+  const h = await call('file_history', { path: target.path });
+  if (typeof h === 'string' || !h.created) return null;
+  return (
+    head +
+    `**\`${target.path}\`** was ${h.created.uncertain ? 'created on or before' : 'created on'} **${day(h.created.date)}** by **${h.created.author}** in \`${short(h.created.sha)}\` — “${h.created.subject}”. ` +
+    `It has ${h.commitCount} commit(s); the last change was ${day(h.lastChanged.date)} by ${h.lastChanged.author} (“${h.lastChanged.subject}”).` +
+    (h.renames.length ? `\n\nRenames: ${h.renames.map((r: any) => `\`${r.from}\` → \`${r.to}\``).join(', ')}.` : '')
+  );
 }
 
 function mockAnswer(category: Category, question: string, chunks: RetrievedChunk[], sums: any[], insights: any[]): string {

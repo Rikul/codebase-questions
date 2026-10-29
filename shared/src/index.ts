@@ -218,6 +218,14 @@ export const ExplanationSchema = z.object({
   signature: z.string().optional().describe('For symbols: the signature'),
   examples: z.array(z.object({ path: z.string(), line: z.number().int().optional(), note: z.string() })).optional().describe('Representative usage examples'),
   gotchas: z.array(z.string()).optional().describe('Pitfalls, side effects, error handling or security notes worth knowing'),
+  history: z
+    .object({
+      created: z.string().describe('When and by whom it was created/introduced, with commit sha (markdown). Say "on or before" if history is truncated.'),
+      evolution: z.string().describe('How and why it changed over time, citing short commit shas (markdown, 2-5 sentences)'),
+      keyCommits: z.array(z.object({ sha: z.string(), date: z.string().optional(), why: z.string() })).describe('The most important commits in its history'),
+    })
+    .optional()
+    .describe('Git history: only when history tools return data'),
 });
 export type Explanation = z.infer<typeof ExplanationSchema>;
 
@@ -329,6 +337,14 @@ export const ExportSchema = z.object({
     .optional(),
   flows: z.array(FlowSchema).optional(),
   explanations: z.array(z.object({ key: z.string(), fileHash: z.string(), content: z.string(), createdAt: z.string() })).optional(),
+  history: z
+    .object({
+      commits: z.array(z.object({ sha: z.string(), seq: z.number(), author: z.string(), date: z.string(), subject: z.string(), body: z.string().nullable() })),
+      fileCommits: z.array(z.object({ path: z.string(), sha: z.string(), status: z.string(), oldPath: z.string().nullable(), added: z.number().nullable(), deleted: z.number().nullable() })),
+      shallow: z.boolean(),
+      root: z.string().nullable(),
+    })
+    .optional(),
   refs: z
     .array(z.object({ name: z.string(), path: z.string(), line: z.number(), kind: z.string(), fromSymbol: z.string().nullable(), targetPath: z.string().nullable(), targetLine: z.number().nullable(), confidence: z.string() }))
     .optional(),

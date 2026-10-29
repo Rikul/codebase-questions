@@ -6,6 +6,7 @@ import { json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
 import { saveFlows } from '../analyze/flows.js';
+import { storeFileHistorySummaries } from '../history/index.js';
 
 export function exportProject(db: DB, repoId: string, includeSource: boolean): ProjectExport {
   const repo = db.prepare('SELECT * FROM repos WHERE id=?').get(repoId) as any;
@@ -55,6 +56,18 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
   out.symbols = (db.prepare('SELECT path, name, kind, line, end_line, exported, parent, signature FROM symbols WHERE repo_id=?').all(repoId) as any[]).map((s) => ({
     path: s.path, name: s.name, kind: s.kind, line: s.line, endLine: s.end_line ?? s.line, exported: Boolean(s.exported), parent: s.parent, signature: s.signature,
   }));
+  const commits = db.prepare('SELECT sha, seq, author, date, subject, body FROM commits WHERE repo_id=? ORDER BY seq LIMIT 2000').all(repoId) as any[];
+  if (commits.length) {
+    const shas = new Set(commits.map((c) => c.sha));
+    out.history = {
+      commits,
+      fileCommits: (db.prepare('SELECT path, sha, status, old_path, added, deleted FROM file_commits WHERE repo_id=?').all(repoId) as any[])
+        .filter((f) => shas.has(f.sha))
+        .map((f) => ({ path: f.path, sha: f.sha, status: f.status, oldPath: f.old_path, added: f.added, deleted: f.deleted })),
+      shallow: Boolean(repo.history_shallow) || commits.length >= 2000,
+      root: commits.length >= 2000 ? commits[commits.length - 1].sha : repo.history_root,
+    };
+  }
   if (includeSource) {
     out.refs = (db.prepare('SELECT * FROM refs WHERE repo_id=?').all(repoId) as any[]).map((r) => ({
       name: r.name, path: r.path, line: r.line, kind: r.kind, fromSymbol: r.from_symbol, targetPath: r.target_path, targetLine: r.target_line, confidence: r.confidence,
@@ -99,9 +112,17 @@ export function importProject(db: DB, data: unknown): string {
     for (const x of p.explanations ?? []) insX.run(repoId, x.key, x.fileHash, x.content, x.createdAt);
     const insS = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const s of p.symbols ?? []) insS.run(repoId, s.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine, s.parent, s.signature);
+    if (p.history) {
+      const insC = db.prepare('INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, date, subject, body) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const c of p.history.commits) insC.run(repoId, c.sha, c.seq, c.author, c.date, c.subject, c.body);
+      const insFc = db.prepare('INSERT INTO file_commits (repo_id, path, sha, status, old_path, added, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const f of p.history.fileCommits) insFc.run(repoId, f.path, f.sha, f.status, f.oldPath, f.added, f.deleted);
+      db.prepare('UPDATE repos SET history_shallow=?, history_root=? WHERE id=?').run(p.history.shallow ? 1 : 0, p.history.root, repoId);
+    }
     const insR = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const r of p.refs ?? []) insR.run(repoId, r.name, r.path, r.line, r.kind, r.fromSymbol, r.targetPath, r.targetLine, r.confidence);
     if (p.chunks?.length) db.prepare('UPDATE repos SET has_source=1 WHERE id=?').run(repoId);
+    if (p.history) storeFileHistorySummaries(db, repoId);
   })();
   return repoId;
 }

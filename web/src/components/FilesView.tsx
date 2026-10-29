@@ -3,6 +3,7 @@ import type { FileNode } from '@cq/shared';
 import { api } from '../lib/api';
 import { useRepo } from '../lib/repoContext';
 import { CodeViewer } from './CodeViewer';
+import { ExplainPanel, type ExplainSubject } from './ExplainPanel';
 
 function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: FileNode; depth: number; selected: string | null; onSelect: (p: string) => void; open: Set<string>; toggle: (p: string) => void }) {
   const name = node.path.split('/').pop() || '/';
@@ -28,38 +29,55 @@ function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: Fil
   );
 }
 
-export function FilesView({ initialPath }: { initialPath: string | null }) {
-  const { repo, askAbout, openCode } = useRepo();
+export function FilesView({ initialPath, initialSymbol }: { initialPath: string | null; initialSymbol?: { name?: string; line?: number } | null }) {
+  const { repo, openCode } = useRepo();
   const [tree, setTree] = useState<FileNode | null>(null);
   const [path, setPath] = useState<string | null>(initialPath);
   const [file, setFile] = useState<any>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const [idents, setIdents] = useState<Set<string>>(new Set());
+  const [subject, setSubject] = useState<ExplainSubject | null>(initialPath ? { path: initialPath, symbol: initialSymbol ?? undefined } : null);
+  const [showExplain, setShowExplain] = useState(true);
 
   useEffect(() => {
     api<FileNode>(`/repos/${repo.id}/files`).then((t) => {
       setTree(t);
-      setOpen(new Set(t.children?.filter((c) => c.type === 'dir').slice(0, 1).map((c) => c.path)));
+      setOpen((o) => (o.size ? o : new Set(t.children?.filter((c) => c.type === 'dir').slice(0, 1).map((c) => c.path))));
     });
   }, [repo.id]);
   useEffect(() => {
+    if (!initialPath) return;
     setPath(initialPath);
-  }, [initialPath]);
+    setSubject({ path: initialPath, symbol: initialSymbol ?? undefined });
+  }, [initialPath, initialSymbol]);
   useEffect(() => {
     if (!path) return;
     setFile(null);
     const parts = path.split('/');
     setOpen((o) => new Set([...o, ...parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))]));
     api<any>(`/repos/${repo.id}/files?path=${encodeURIComponent(path)}`).then(setFile, () => setFile({ error: true }));
+    api<string[]>(`/repos/${repo.id}/identifiers?path=${encodeURIComponent(path)}`).then((l) => setIdents(new Set(l)), () => setIdents(new Set()));
   }, [repo.id, path]);
 
+  const selectFile = (p: string) => {
+    setPath(p);
+    setSubject({ path: p });
+  };
+  // Navigating the explain panel to another file also opens that file.
+  const onSubject = (s: ExplainSubject) => {
+    setSubject(s);
+    setShowExplain(true);
+    if (s.path !== path) setPath(s.path);
+  };
   const toggle = (p: string) => setOpen((o) => { const n = new Set(o); n.has(p) ? n.delete(p) : n.add(p); return n; });
-  const signals = useMemo(() => (file?.meta?.security ?? []) as { kind: string; line: number }[], [file]);
+  const signals = useMemo(() => ((file?.meta?.security ?? []) as { kind: string; line: number }[]).filter((s) => s.kind !== 'auth'), [file]);
+  const activeLine = subject?.path === path ? subject?.symbol?.line ?? subject?.snippet?.startLine ?? null : null;
 
   return (
     <div className="files">
-      <div className="tree">{tree ? <TreeNode node={tree} depth={-1} selected={path} onSelect={setPath} open={open} toggle={toggle} /> : <span className="spinner" />}</div>
+      <div className="tree">{tree ? <TreeNode node={tree} depth={-1} selected={path} onSelect={selectFile} open={open} toggle={toggle} /> : <span className="spinner" />}</div>
       <div className="file-view">
-        {!path && <div className="empty">Select a file to read it with its summary, symbols and dependencies.</div>}
+        {!path && <div className="empty">Pick a file. You'll get an explanation of what it is, where it fits, when it runs, and who calls it.</div>}
         {path && !file && <div className="empty"><span className="spinner" /></div>}
         {file?.error && <div className="error-box">Could not load {path}</div>}
         {file && !file.error && (
@@ -67,9 +85,8 @@ export function FilesView({ initialPath }: { initialPath: string | null }) {
             <div className="file-meta">
               <div className="row">
                 <h3 className="grow" style={{ fontFamily: 'var(--mono)', fontSize: 15, wordBreak: 'break-all' }}>{file.path}</h3>
-                <button className="btn sm" onClick={() => askAbout({ focus: { path: file.path, label: file.path } })}>Ask about this file</button>
+                {!showExplain && <button className="btn sm" onClick={() => { setShowExplain(true); setSubject({ path: file.path }); }}>✦ Explain</button>}
               </div>
-              {file.summary && <div className="card" style={{ padding: 12 }}>{file.summary}</div>}
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 {file.meta?.isEntry && <span className="chip">entry point</span>}
                 {file.meta?.isTest && <span className="chip">test</span>}
@@ -79,30 +96,23 @@ export function FilesView({ initialPath }: { initialPath: string | null }) {
                 {signals.slice(0, 8).map((s, i) => (
                   <button key={`s${i}`} className="chip" style={{ cursor: 'pointer', color: 'var(--danger)' }} onClick={() => openCode(file.path, s.line, s.line)}>⚠ {s.kind}:{s.line}</button>
                 ))}
+                <span className="muted small">Click an underlined name to explain it, or select code and choose <b>Explain selection</b>.</span>
               </div>
-              {(file.imports.length > 0 || file.importedBy.length > 0) && (
-                <div className="row small" style={{ flexWrap: 'wrap', alignItems: 'flex-start', gap: 16 }}>
-                  {file.imports.length > 0 && (
-                    <div>
-                      <span className="muted">Imports: </span>
-                      {file.imports.slice(0, 20).map((x: any, i: number) =>
-                        String(x.path).startsWith('pkg:') ? <span key={i} className="chip" style={{ margin: 2 }}>{x.path.slice(4)}</span> : <button key={i} className="cite" style={{ margin: 2 }} onClick={() => setPath(x.path)}>{x.path}</button>,
-                      )}
-                    </div>
-                  )}
-                  {file.importedBy.length > 0 && (
-                    <div>
-                      <span className="muted">Imported by: </span>
-                      {file.importedBy.slice(0, 20).map((x: any, i: number) => <button key={i} className="cite" style={{ margin: 2 }} onClick={() => setPath(x.path)}>{x.path}</button>)}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
-            <CodeViewer code={file.content} lang={file.lang} full title={`${file.content.split('\n').length} lines · ${file.lang ?? 'text'}`} />
+            <CodeViewer
+              code={file.content}
+              lang={file.lang}
+              full
+              title={`${file.content.split('\n').length} lines · ${file.lang ?? 'text'}`}
+              identifiers={idents}
+              activeLine={activeLine}
+              onIdentifierClick={(name, line) => onSubject({ path: file.path, symbol: { name, line } })}
+              onExplainSelection={(sel) => onSubject({ path: file.path, snippet: sel })}
+            />
           </>
         )}
       </div>
+      {subject && showExplain && <ExplainPanel key={JSON.stringify(subject)} subject={subject} onSubject={onSubject} onClose={() => setShowExplain(false)} />}
     </div>
   );
 }

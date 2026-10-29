@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { AgentOptions, AgentResult } from './agent.js';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -31,6 +32,8 @@ export interface LLMProvider {
   complete(opts: CompleteOptions): Promise<string>;
   completeJSON<T>(opts: JSONOptions<T>): Promise<T>;
   stream(opts: CompleteOptions): AsyncIterable<string>;
+  /** Tool-use loop: the model inspects the codebase with tools, then answers (or submits structured output). */
+  runAgent<T>(opts: AgentOptions<T>): Promise<AgentResult<T>>;
 }
 
 export interface EmbeddingProvider {

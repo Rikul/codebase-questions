@@ -24,7 +24,7 @@ type TabId = (typeof TABS)[number]['id'];
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const stages = ['clone', 'scan', 'parse', 'index', 'summarize', 'architecture', 'insights', 'store'];
+  const stages = ['clone', 'scan', 'parse', 'index', 'summarize', 'architecture', 'insights', 'store', 'flows'];
   const cur = stages.indexOf(ev?.stage ?? '');
   return (
     <div className="page" style={{ maxWidth: 640 }}>
@@ -34,7 +34,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save'].map((s, i) => (
+          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save', 'Trace key flows'].map((s, i) => (
             <li key={s} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{s}</li>
           ))}
         </ol>
@@ -52,6 +52,7 @@ export function Repo() {
   const [code, setCode] = useState<CodeTarget | null>(null);
   const [intent, setIntent] = useState<AskIntent | null>(null);
   const [filePath, setFilePath] = useState<string | null>(null);
+  const [fileSymbol, setFileSymbol] = useState<{ name?: string; line?: number } | null>(null);
   const [menu, setMenu] = useState(false);
 
   const load = useCallback(() => api<RepoSummary>(`/repos/${id}`).then(setRepo, (e) => setError(e.message)), [id]);
@@ -69,9 +70,10 @@ export function Repo() {
           setIntent(i);
           setTab('ask');
         },
-        openFile: (p) => {
+        openFile: (p, symbol) => {
           setCode(null);
           setFilePath(p);
+          setFileSymbol(symbol ?? null);
           setTab('files');
         },
       },
@@ -138,11 +140,11 @@ export function Repo() {
                 </div>
               )}
               {tab === 'ask' && <Chat intent={intent} onIntentConsumed={() => setIntent(null)} />}
-              {tab === 'files' && <FilesView initialPath={filePath} />}
+              {tab === 'files' && <FilesView initialPath={filePath} initialSymbol={fileSymbol} />}
             </div>
           </>
         )}
-        {code && <CodeModal repoId={repo.id} target={code} onClose={() => setCode(null)} onOpenFile={ctx.openFile} />}
+        {code && <CodeModal repoId={repo.id} target={code} onClose={() => setCode(null)} onOpenFile={(p, sym) => ctx.openFile(p, sym)} />}
       </div>
     </RepoContext.Provider>
   );

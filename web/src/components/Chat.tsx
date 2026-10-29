@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AskEvent, Category, ChatMessage, Citation } from '@cq/shared';
+import type { AgentStep, AskEvent, Category, ChatMessage, Citation } from '@cq/shared';
+import { AgentTrace, upsertStep } from './AgentTrace';
 import { CATEGORIES } from '@cq/shared';
 import { api, ask } from '../lib/api';
 import { CATEGORY_META } from '../lib/format';
@@ -15,6 +16,8 @@ interface UiMsg {
   citations: Citation[];
   sources?: Citation[];
   streaming?: boolean;
+  steps?: AgentStep[];
+  notes?: string[];
 }
 
 export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; onIntentConsumed: () => void }) {
@@ -68,13 +71,15 @@ export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; o
       try {
         await ask(
           repo.id,
-          { question: q, category: cat ?? undefined, conversationId: cid ?? undefined, focus: foc ? { componentId: foc.componentId, connectionId: foc.connectionId, path: foc.path } : undefined },
+          { question: q, category: cat ?? undefined, conversationId: cid ?? undefined, focus: foc ? { componentId: foc.componentId, connectionId: foc.connectionId, path: foc.path, symbol: foc.symbol, snippet: foc.snippet } : undefined },
           (ev: AskEvent) => {
             if (ev.type === 'meta') {
               setConvId(ev.conversationId);
               update((m) => ({ ...m, category: ev.category }));
             } else if (ev.type === 'sources') update((m) => ({ ...m, sources: ev.citations }));
             else if (ev.type === 'token') update((m) => ({ ...m, content: m.content + ev.text }));
+            else if (ev.type === 'step') update((m) => ({ ...m, steps: upsertStep(m.steps ?? [], ev.step) }));
+            else if (ev.type === 'reset') update((m) => ({ ...m, notes: [...(m.notes ?? []), ev.text.trim()].filter(Boolean), content: '' }));
             else if (ev.type === 'done') update((m) => ({ ...m, citations: ev.citations, streaming: false }));
             else if (ev.type === 'error') update((m) => ({ ...m, content: m.content + `\n\n**Error:** ${ev.message}`, streaming: false }));
           },
@@ -141,7 +146,8 @@ export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; o
               ) : (
                 <div key={m.key} className="msg assistant card">
                   {m.category && <div className="chip" style={{ marginBottom: 8 }}>{CATEGORY_META[m.category].icon} {CATEGORY_META[m.category].short}</div>}
-                  {m.content ? <Markdown>{m.content}</Markdown> : <span className="spinner" />}
+                  {(m.steps?.length ?? 0) > 0 && <AgentTrace steps={m.steps!} running={Boolean(m.streaming) && !m.content} notes={m.notes} />}
+                  {m.content ? <Markdown>{m.content}</Markdown> : m.streaming && !(m.steps?.length) ? <span className="spinner" /> : null}
                   {!m.streaming && (m.citations.length > 0 || (m.sources?.length ?? 0) > 0) && (
                     <div className="refs">
                       <span className="muted small">Sources:</span>

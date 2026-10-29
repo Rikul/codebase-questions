@@ -145,6 +145,48 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS refs (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  path TEXT NOT NULL,
+  line INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  from_symbol TEXT,
+  target_path TEXT,
+  target_line INTEGER,
+  confidence TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS refs_target ON refs(repo_id, target_path, name);
+CREATE INDEX IF NOT EXISTS refs_name ON refs(repo_id, name);
+CREATE INDEX IF NOT EXISTS refs_path ON refs(repo_id, path, line);
+
+CREATE TABLE IF NOT EXISTS explanations (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  file_hash TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (repo_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS flows (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (repo_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS diagram_answers (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  question TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (repo_id, question)
+);
+
 CREATE TABLE IF NOT EXISTS auth_codes (
   hash TEXT PRIMARY KEY,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -165,7 +207,22 @@ export function openDb(file: string): DB {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Additive column migrations for databases created by earlier versions. */
+function migrate(db: DB) {
+  const add = (table: string, col: string, decl: string) => {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${decl}`);
+  };
+  add('symbols', 'end_line', 'INTEGER');
+  add('symbols', 'parent', 'TEXT');
+  add('symbols', 'signature', 'TEXT');
+  // Extra architecture fields (layer, group, protocol, confidence, ...) are stored as JSON.
+  add('components', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  add('connections', 'extra', "TEXT NOT NULL DEFAULT '{}'");
 }
 
 export function json<T>(v: string | null | undefined, fallback: T): T {
@@ -180,7 +237,7 @@ export function json<T>(v: string | null | undefined, fallback: T): T {
 /** Remove all derived analysis for a repo (keeps the repo row, jobs and conversations). */
 export function clearAnalysis(db: DB, repoId: string) {
   const tx = db.transaction(() => {
-    for (const t of ['file_edges', 'symbols', 'chunks', 'components', 'connections', 'insights', 'suggested_questions']) {
+    for (const t of ['file_edges', 'symbols', 'refs', 'chunks', 'components', 'connections', 'insights', 'suggested_questions', 'flows', 'diagram_answers']) {
       db.prepare(`DELETE FROM ${t} WHERE repo_id = ?`).run(repoId);
     }
   });

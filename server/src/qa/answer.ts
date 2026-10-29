@@ -6,11 +6,42 @@ import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import type { ChatTurn } from '../llm/provider.js';
 import type { RetrievedChunk } from './retrieve.js';
 import { retrieve } from './retrieve.js';
+import { agentEventMapper, resolveTarget } from '../agent/explain.js';
+import { RepoIndex, repoTools } from '../agent/tools.js';
+import { AGENT_GUIDANCE } from '../llm/agent.js';
+import { agentWithFallback } from '../llm/index.js';
+
+/** Minimal async queue bridging callback events into an async generator. */
+class Channel<T> implements AsyncIterable<T> {
+  private items: T[] = [];
+  private waiting: ((v: IteratorResult<T>) => void) | null = null;
+  private closed = false;
+  push(v: T) {
+    if (this.waiting) {
+      const w = this.waiting;
+      this.waiting = null;
+      w({ value: v, done: false });
+    } else this.items.push(v);
+  }
+  close() {
+    this.closed = true;
+    if (this.waiting) this.waiting({ value: undefined as never, done: true });
+  }
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: () => {
+        if (this.items.length) return Promise.resolve({ value: this.items.shift()!, done: false });
+        if (this.closed) return Promise.resolve({ value: undefined as never, done: true });
+        return new Promise((r) => (this.waiting = r));
+      },
+    };
+  }
+}
 
 const KEYWORDS: Record<Category, RegExp> = {
   architecture: /\b(architect\w*|design|component|module|layer|structure|interact\w*|flow|depend\w*|coupl\w*|diagram|system|microservice|data ?flow|talks? to|communicat\w*|pattern)\b/gi,
   onboarding: /\b(start|setup|set up|install|run|build|onboard\w*|new (engineer|developer)|where (do|should) i|read first|getting started|convention|test(s|ing)?|debug|contribut\w*|local(ly)?|overview|what does|explain)\b/gi,
-  security: /\b(secur\w*|vuln\w*|attack|exploit|auth\w*|permission|xss|csrf|sql ?injection|injection|sanitiz\w*|secret|token|password|crypt\w*|cve|threat|ssrf|rce|cors|privilege|leak)\b/gi,
+  security: /\b(secur\w*|vuln\w*|attack|exploit|auth\w*|permission|xss|csrf|sql ?injection|injection|sanitiz\w*|secrets?|tokens?|passwords?|hash\w*|crypt\w*|cve|threat|ssrf|rce|cors|privilege|leak)\b/gi,
   api: /\b(api|sdk|library|libraries|endpoint|interface|integrat\w*|call|client|import|usage|example|parameter|signature|runtime|behaviou?r|retry|async|return|exception|hook)\b/gi,
 };
 
@@ -84,7 +115,18 @@ function resolveFocus(db: DB, repoId: string, focus: AskRequest['focus']): Focus
       return { paths: [...new Set(ev.map((x) => x.path))], text: `The user is asking about the connection ${e.src} → ${e.dst} (${e.kind}, "${e.label}"): ${e.description}` };
     }
   }
-  if (focus.path) return { paths: [focus.path], text: `The user is looking at \`${focus.path}\`.` };
+  if (focus.path) {
+    try {
+      const ix = new RepoIndex(db, repoId);
+      const { target } = resolveTarget(ix, { path: focus.path, symbol: focus.symbol, snippet: focus.snippet });
+      let text = `The user is looking at \`${target.path}\`.`;
+      if (target.kind === 'symbol') text = `The question is about \`${target.name}\` (${target.symbolKind}) in \`${target.path}\`${target.line ? ` lines ${target.line}-${target.endLine}` : ''}. Use find_references / symbol_calls to answer caller/callee questions.`;
+      if (focus.snippet?.text) text = `The question is about this selected code from \`${target.path}\` (lines ${focus.snippet.startLine ?? '?'}-${focus.snippet.endLine ?? '?'}):\n\`\`\`\n${focus.snippet.text.slice(0, 4000)}\n\`\`\``;
+      return { paths: [target.path], text };
+    } catch {
+      return { paths: [focus.path], text: `The user is looking at \`${focus.path}\`.` };
+    }
+  }
   return { paths: [], text: '' };
 }
 
@@ -143,17 +185,35 @@ export async function* answerQuestion(
     .join('\n\n');
 
   const mock = () => mockAnswer(category, question, chunks, sums, insights);
+  // Agent mode: the model may inspect the code with tools before answering.
+  const ix = new RepoIndex(db, repoId, embeddings);
+  const queue = new Channel<AskEvent>();
   let full = '';
-  try {
-    for await (const t of llm.stream({ system, maxTokens: 3000, messages: [...history, { role: 'user', content: `${context}\n\n---\n\nQuestion: ${question}` }], mock })) {
-      full += t;
-      yield { type: 'token', text: t };
-    }
-  } catch (err) {
-    const msg = `\n\n_Model call failed: ${(err as Error).message}_`;
-    full += msg;
-    yield { type: 'token', text: msg };
-  }
+  const mapper = agentEventMapper((e) => {
+    if (e.type === 'token') full += e.text;
+    if (e.type === 'reset') full = full.slice(0, Math.max(0, full.length - e.text.length));
+    queue.push(e as AskEvent);
+  });
+  const run = agentWithFallback(llm, {
+    system: `${system}\n\n${AGENT_GUIDANCE} The context below is a starting point; use tools when it does not fully answer the question.`,
+    maxTokens: 4000,
+    maxSteps: 10,
+    messages: [...history, { role: 'user', content: `${context}\n\n---\n\nQuestion: ${question}` }],
+    tools: repoTools(ix),
+    onEvent: mapper,
+    scripted: async (_call, emitText) => {
+      emitText(mock());
+      return {};
+    },
+  })
+    .catch((err) => {
+      const msg = `\n\n_Model call failed: ${(err as Error).message}_`;
+      full += msg;
+      queue.push({ type: 'token', text: msg });
+    })
+    .finally(() => queue.close());
+  for await (const ev of queue) yield ev;
+  await run;
   const known = new Set((db.prepare('SELECT path FROM files WHERE repo_id=?').all(repoId) as { path: string }[]).map((r) => r.path));
   let citations = extractCitations(full, known);
   if (!citations.length) citations = sources.slice(0, 6);

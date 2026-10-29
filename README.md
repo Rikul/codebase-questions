@@ -9,6 +9,35 @@ Point the app at any Git repository. It clones the repo, maps it with static ana
 | **Security** | Attack surface (routes and entry points), authentication, injection sinks, secrets and dependency risk. Findings are ranked by severity and link to code. |
 | **API & library integration** | The public API surface, an HTTP endpoint table, and how each major third-party library is used at runtime. |
 
+### Explain any file, symbol or selection
+
+The **Files** tab (and every code popup opened from a citation) has an explanation panel that answers five questions about whatever you point at:
+
+1. **What is it?**
+2. **How does it fit in** with the rest of the project?
+3. **When is it used?** For example at startup, on which HTTP routes, from jobs, or only in tests. It traces import chains from entry points.
+4. **What does it contain?** Its functions, classes and variables. Click one to explain it.
+5. **Who calls it, and what does it call?** Callers and callees are resolved through a cross-reference index and link to the exact lines.
+
+Click any underlined name in the code to explain that symbol. Select a few lines and choose **Explain selection** to explain just that code. Explanations are cached per file version and included in exports.
+
+### Better diagrams from LLM understanding
+
+- **Verified architecture.** The model drafts the component diagram, then *verifies* each connection by reading the code with its tools. It fixes wrong edges, adds missed ones (for example queue publish/consume pairs or service-to-service calls), and records the protocol, sync vs async, and the data exchanged. Verified edges are solid; unverified ones are dotted and marked "?".
+- **Layers and groups.** Components are ordered left to right by layer (entry → interface → core → data → infra → external). Multi-package repos are drawn with service or package containers.
+- **Flows.** The **Flows** view holds sequence diagrams of the most important runtime paths, such as `GET /users/:id` → handler → service → database. Every arrow links to the line that makes the call. Type "trace user signup" to have a new one traced on demand.
+- **Ask the diagram.** Ask "what happens on login?" and the matching path through the diagram is highlighted. **Walk me through it** then plays a step-by-step tour that pans to each component and connection with a caption and a code link.
+
+### The model investigates instead of guessing
+
+The explainer, diagram answers, flow tracing, architecture verification and the **Ask** tab all run as a tool-use agent. Its tools are read-only and confined to the repository:
+- `read_file`, `list_dir`, `search_code`, `grep`
+- `file_info`, `list_symbols`, `find_definition`
+- `find_references`, `symbol_calls`, `importer_chain`
+- `get_architecture`, `get_insights`
+
+A live trace shows each step, for example "Reading src/app.ts:1-120" and "Finding references to getUser". Structured results are validated against a schema; an invalid submission goes back to the model to fix. Without an API key, the same tools are called by a scripted static investigation, so all of these features still work offline.
+
 The **Ask** tab answers free-form questions. It detects the category automatically (or you pick one), streams the answer, and cites code as clickable `path:line` links. You can scope a question to one component, connection or file.
 
 ## Quick start (Docker)
@@ -79,11 +108,13 @@ clone (shallow, https only) → scan (.gitignore, skip binaries/vendored)
   → LLM: per-file summaries (batched, cached by content hash)
   → LLM: architecture synthesis (components + connections with code evidence)
   → LLM: per-category insights + suggested questions
-  → SQLite knowledge base
+  → LLM agent: verify architecture, trace key flows (sequence diagrams)
+  → SQLite knowledge base (+ symbol ranges and a cross-reference index for the agent's tools)
 ```
 
 - `server/` contains the Express 5 API, the ingestion pipeline (`src/ingest`), the analysis steps (`src/analyze`), retrieval and answering (`src/qa`), auth, and export/import. It uses SQLite via better-sqlite3 in a single file under `DATA_DIR`.
-- `server/src/llm/` holds the provider interface plus Anthropic (structured output via forced tool use), OpenAI (JSON-schema output) and an offline mock. Every LLM step has a static-analysis fallback, so one failed call never fails the whole analysis.
+- `server/src/agent/` holds the inspection tools (`tools.ts`), the file/symbol explainer (`explain.ts`) and "ask the diagram" (`diagram.ts`). `server/src/analyze/flows.ts` traces sequence diagrams. `server/src/ingest/refs.ts` builds the cross-reference index (call sites, enclosing symbol, resolved target).
+- `server/src/llm/` holds the provider interface plus Anthropic (structured output via forced tool use), OpenAI (JSON-schema output) and an offline mock. Each provider also has a `runAgent` tool-use loop (`server/src/llm/agent.ts` handles budgets and submission validation). Every LLM step has a static-analysis fallback, so one failed call never fails the whole analysis.
 - `web/` is a React + Vite app: React Flow and ELK for the diagram, Shiki for code highlighting, and react-markdown for insights and answers.
 - `shared/` holds the types and zod schemas used by both sides, including the export format.
 

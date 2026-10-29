@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { Architecture, Component, ComponentType, Connection, ConnectionKind } from '@cq/shared';
-import { COMPONENT_TYPES, CONNECTION_KINDS } from '@cq/shared';
+import { COMPONENT_TYPES, CONNECTION_KINDS, LAYERS } from '@cq/shared';
+import type { Layer } from '@cq/shared';
+import { repoTools } from '../agent/tools.js';
+import { AGENT_GUIDANCE } from '../llm/agent.js';
+import { agentWithFallback } from '../llm/index.js';
 import { jsonWithFallback } from '../llm/index.js';
 import type { RepoContext } from './context.js';
 import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, readmeIntro, slug, truncate } from './context.js';
@@ -16,6 +20,11 @@ const LlmArchSchema = z.object({
         description: z.string().describe('2-3 sentences'),
         responsibilities: z.array(z.string()).describe('3-6 bullet points'),
         paths: z.array(z.string()).describe('directory prefixes or file paths that belong to this component; empty for external systems'),
+        layer: z.enum(LAYERS).optional().describe('entry (routes/CLI/main), interface (UI/API surface), core (domain logic), data (persistence/models), infra (config/build/deploy), external (third-party systems)'),
+        group: z.string().optional().describe('deployable unit or package this belongs to (e.g. "api-server", "web-client"); omit for single-package repos'),
+        keyFiles: z.array(z.string()).optional().describe('2-5 most important files'),
+        entryPoints: z.array(z.string()).optional(),
+        techStack: z.array(z.string()).optional().describe('frameworks/libraries this component is built on'),
       }),
     )
     .describe('5-15 components, including external systems (databases, queues, third-party APIs) the code talks to'),
@@ -29,6 +38,11 @@ const LlmArchSchema = z.object({
       evidence: z
         .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))
         .describe('1-4 code locations demonstrating the interaction, taken from the provided samples'),
+      sync: z.enum(['sync', 'async']).optional(),
+      protocol: z.string().optional().describe('e.g. "in-process call", "REST/HTTP", "SQL", "Redis", "Kafka topic orders", "WebSocket"'),
+      dataExchanged: z.string().optional().describe('what flows over this edge, e.g. "User records", "job payloads"'),
+      direction: z.enum(['request', 'response', 'bidirectional']).optional(),
+      confidence: z.enum(['verified', 'inferred']).optional().describe('verified = you read code that performs this interaction'),
     }),
   ),
 });
@@ -47,16 +61,22 @@ const INFRA_NAMES: Record<string, { name: string; type: ComponentType; kind: Con
   'http-client': { name: 'External HTTP APIs', type: 'external', kind: 'http', label: 'HTTP requests' },
 };
 
+const LAYER_OF: Record<ComponentType, Layer> = {
+  frontend: 'interface', api: 'entry', cli: 'entry', worker: 'entry', service: 'core', library: 'core',
+  database: 'data', queue: 'data', config: 'infra', test: 'infra', external: 'external', other: 'core',
+};
+
 function guessType(ctx: RepoContext, id: string, files: string[]): ComponentType {
   const p = id.toLowerCase();
   if (/(^|\/)(tests?|__tests__|spec|e2e)(\/|$)/.test(p)) return 'test';
-  if (/(^|\/)(web|ui|frontend|client|components|pages|views|public|static|www|site|app\/\(|src\/app)/.test(p)) return 'frontend';
+  const routes = files.reduce((n, f) => n + (ctx.facts.get(f)?.routes.length ?? 0), 0);
+  if (routes > 0 || /(^|\/)(api|routes?|controllers?|handlers?|endpoints?|server)(\/|$)/.test(p)) return 'api';
+  const ui = files.filter((f) => /\.(tsx|jsx|vue|svelte|astro|html|css|scss)$/.test(f)).length;
+  if (/(^|\/)(web|ui|frontend|client|components|pages|views|public|static|www|site)(\/|$)/.test(p) || ui > files.length / 2) return 'frontend';
   if (/(^|\/)(cli|cmd|bin|scripts?|tools?)(\/|$)/.test(p)) return 'cli';
   if (/(^|\/)(workers?|jobs?|tasks?|queues?|consumers?)(\/|$)/.test(p)) return 'worker';
   if (/(^|\/)(config|configs|settings|deploy|infra|k8s|helm|terraform|\.github)(\/|$)/.test(p)) return 'config';
-  if (/(^|\/)(db|database|models?|migrations?|schema|repositories|dal|store)(\/|$)/.test(p)) return 'library';
-  const routes = files.reduce((n, f) => n + (ctx.facts.get(f)?.routes.length ?? 0), 0);
-  if (routes > 0 || /(^|\/)(api|routes?|controllers?|handlers?|endpoints?|server)(\/|$)/.test(p)) return 'api';
+  if (/(^|\/)(db|database|models?|migrations?|schema|repositories|dal|store|prisma)(\/|$)/.test(p)) return 'library';
   if (/(^|\/)(lib|utils?|common|shared|core|helpers?|pkg|internal)(\/|$)/.test(p)) return 'library';
   return 'service';
 }
@@ -100,6 +120,10 @@ export function heuristicArchitecture(ctx: RepoContext): Architecture {
       type,
       description: `${codeFiles.length} code file${codeFiles.length === 1 ? '' : 's'} ${where}${topFiles.length ? `; main: ${topFiles.map((f) => `\`${f.split('/').pop()}\``).join(', ')}` : ''}${exported.length ? `. Defines ${exported.join(', ')}` : ''}.`,
       responsibilities: topFiles.map((f) => `${f.split('/').pop()}: ${(ctx.summaries.get(f) ?? '').slice(0, 140)}`),
+      layer: LAYER_OF[type],
+      keyFiles: topFiles,
+      entryPoints: g.files.filter((f) => ctx.facts.get(f)?.isEntry && !ctx.facts.get(f)?.isTest).slice(0, 4),
+      techStack: [...new Set(g.files.flatMap((f) => [...(ctx.graph.external.get(f) ?? [])]))].slice(0, 6),
       paths: g.id === '(root)' ? [] : [g.id],
     });
   }
@@ -119,6 +143,10 @@ export function heuristicArchitecture(ctx: RepoContext): Architecture {
         .map((s) => `\`${s.path}\` → \`${s.target}\``)
         .join(', ')}.`,
       evidence: e.samples.slice(0, 4).map((s) => ({ path: s.path, startLine: s.line, endLine: s.line, note: `imports ${s.target}` })),
+      sync: 'sync',
+      protocol: 'in-process call',
+      direction: 'request',
+      confidence: 'verified',
     });
   }
   // External systems from infra signals.
@@ -139,7 +167,7 @@ export function heuristicArchitecture(ctx: RepoContext): Architecture {
     const info = INFRA_NAMES[kind];
     if (kind === 'http-client' && mods.size > 6) continue;
     const id = uniq(slug(info.name));
-    components.push({ id, name: info.name, type: info.type, description: `${info.name}, detected from how the code uses it (${[...mods.keys()].length} module(s)).`, responsibilities: [], paths: [] });
+    components.push({ id, layer: info.type === 'external' ? 'external' : 'data', name: info.name, type: info.type, description: `${info.name}, detected from how the code uses it (${[...mods.keys()].length} module(s)).`, responsibilities: [], paths: [] });
     for (const [mod, uses] of mods) {
       const from = idFor.get(mod)!;
       connections.push({
@@ -150,6 +178,10 @@ export function heuristicArchitecture(ctx: RepoContext): Architecture {
         label: info.label,
         description: `\`${mod}\` talks to ${info.name}.`,
         evidence: uses.map((u) => ({ path: u.path, startLine: u.line, endLine: u.line, note: u.detail.slice(0, 80) })),
+        sync: info.kind === 'queue' ? 'async' : 'sync',
+        protocol: info.label,
+        direction: 'request',
+        confidence: 'inferred',
       });
     }
   }
@@ -209,7 +241,7 @@ function architecturePrompt(ctx: RepoContext): string {
     .join('\n\n');
 }
 
-function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>): Architecture {
+export function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>): Architecture {
   const used = new Set<string>();
   const remap = new Map<string, string>();
   const components: Component[] = [];
@@ -222,7 +254,9 @@ function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>): Archit
     const paths = c.paths
       .map((p) => p.replace(/^\.?\//, '').replace(/\/\*\*?$/, '').replace(/\/$/, ''))
       .filter((p) => p && ctx.files.some((f) => f.path === p || f.path.startsWith(p + '/')));
-    components.push({ ...c, id, paths });
+    const keyFiles = c.keyFiles?.map((p) => p.replace(/^\.?\//, '')).filter((p) => ctx.fileByPath.has(p));
+    const entryPoints = c.entryPoints?.map((p) => p.replace(/^\.?\//, '')).filter((p) => ctx.fileByPath.has(p));
+    components.push({ ...c, id, paths, keyFiles, entryPoints });
   }
   const connections: Connection[] = [];
   const seen = new Set<string>();
@@ -233,7 +267,9 @@ function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>): Archit
     let id = `${from}--${to}`;
     for (let i = 2; seen.has(id); i++) id = `${from}--${to}-${i}`;
     seen.add(id);
-    connections.push({ id, from, to, kind: e.kind, label: e.label, description: e.description, evidence: cleanRefs(ctx, e.evidence) });
+    const evidence = cleanRefs(ctx, e.evidence);
+    const { from: _f, to: _t, evidence: _e, ...rest } = e;
+    connections.push({ ...rest, id, from, to, evidence, confidence: evidence.length ? (e.confidence ?? 'inferred') : 'inferred' });
   }
   return { overview: raw.overview, components, connections };
 }
@@ -261,8 +297,35 @@ export async function analyzeArchitecture(ctx: RepoContext): Promise<Architectur
     },
     ctx.warn,
   );
-  const arch = normalize(ctx, raw);
-  return arch.components.length ? arch : heuristic;
+  const draft = normalize(ctx, raw);
+  if (!draft.components.length) return heuristic;
+  if (!ctx.index) return draft;
+  ctx.progress('Verifying architecture against the code', 0.5);
+  const asLlm = (a: Architecture) => ({ overview: a.overview, components: a.components, connections: a.connections.map(({ id: _i, ...e }) => e) }) as z.infer<typeof LlmArchSchema>;
+  const verified = await agentWithFallback(
+    ctx.llm,
+    {
+      system:
+        `You are a principal architect reviewing a DRAFT architecture diagram of ${ctx.repoName} for accuracy. ${AGENT_GUIDANCE}\n\n` +
+        'For every connection, confirm the interaction in code (read_file / find_references / grep): fix wrong directions or kinds, drop edges you cannot confirm, and add important missing ones ' +
+        '(network calls between services, queue publish/consume pairs matched by topic or queue name, DB access, calls to third-party APIs). ' +
+        'Set confidence=verified only for edges whose evidence lines you read. Fill protocol, sync/async, dataExchanged and direction. ' +
+        'Assign each component a layer and, for multi-package repos, a group (deployable unit/package). Keep 5-15 components and stable ids. ' +
+        'Spend at most ~10 tool calls, then submit_architecture with the complete corrected architecture (overview, components, connections).',
+      messages: [{ role: 'user', content: `# Draft architecture\n${JSON.stringify(asLlm(draft), null, 1)}\n\n# Module import edges\n${ctx.moduleEdges.slice(0, 40).map((e) => `- ${e.from} -> ${e.to} (${e.count})`).join('\n')}` }],
+      tools: repoTools(ctx.index),
+      maxSteps: 12,
+      maxTokens: 12_000,
+      final: { name: 'architecture', schema: LlmArchSchema },
+      scripted: async () => ({ final: asLlm(draft) }),
+    },
+    ctx.warn,
+  ).catch((err) => {
+    ctx.warn(`architecture verification failed: ${(err as Error).message}`);
+    return null;
+  });
+  const arch = verified?.final ? normalize(ctx, verified.final as z.infer<typeof LlmArchSchema>) : draft;
+  return arch.components.length ? arch : draft;
 }
 
 /** Map every file to the component whose path prefix matches most specifically. */

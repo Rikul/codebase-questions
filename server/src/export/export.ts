@@ -5,6 +5,7 @@ import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
+import { saveFlows } from '../analyze/flows.js';
 
 export function exportProject(db: DB, repoId: string, includeSource: boolean): ProjectExport {
   const repo = db.prepare('SELECT * FROM repos WHERE id=?').get(repoId) as any;
@@ -49,7 +50,15 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
     suggestedQuestions,
     conversations,
   };
+  out.flows = (db.prepare('SELECT content FROM flows WHERE repo_id=? ORDER BY position').all(repoId) as any[]).map((r) => JSON.parse(r.content));
+  out.explanations = (db.prepare('SELECT key, file_hash, content, created_at FROM explanations WHERE repo_id=?').all(repoId) as any[]).map((r) => ({ key: r.key, fileHash: r.file_hash, content: r.content, createdAt: r.created_at }));
+  out.symbols = (db.prepare('SELECT path, name, kind, line, end_line, exported, parent, signature FROM symbols WHERE repo_id=?').all(repoId) as any[]).map((s) => ({
+    path: s.path, name: s.name, kind: s.kind, line: s.line, endLine: s.end_line ?? s.line, exported: Boolean(s.exported), parent: s.parent, signature: s.signature,
+  }));
   if (includeSource) {
+    out.refs = (db.prepare('SELECT * FROM refs WHERE repo_id=?').all(repoId) as any[]).map((r) => ({
+      name: r.name, path: r.path, line: r.line, kind: r.kind, fromSymbol: r.from_symbol, targetPath: r.target_path, targetLine: r.target_line, confidence: r.confidence,
+    }));
     out.chunks = (db.prepare('SELECT path, start_line, end_line, content FROM chunks WHERE repo_id=? ORDER BY id').all(repoId) as any[]).map((c) => ({
       path: c.path,
       startLine: c.start_line,
@@ -85,6 +94,13 @@ export function importProject(db: DB, data: unknown): string {
       for (const m of c.messages) insM.run(cid, m.role, m.content, m.category, JSON.stringify(m.citations), m.createdAt);
     }
     saveAnalysis(db, repoId, p.architecture as Architecture | null, p.insights, p.suggestedQuestions);
+    if (p.flows?.length) saveFlows(db, repoId, p.flows);
+    const insX = db.prepare('INSERT OR REPLACE INTO explanations (repo_id, key, file_hash, content, created_at) VALUES (?, ?, ?, ?, ?)');
+    for (const x of p.explanations ?? []) insX.run(repoId, x.key, x.fileHash, x.content, x.createdAt);
+    const insS = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const s of p.symbols ?? []) insS.run(repoId, s.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine, s.parent, s.signature);
+    const insR = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    for (const r of p.refs ?? []) insR.run(repoId, r.name, r.path, r.line, r.kind, r.fromSymbol, r.targetPath, r.targetLine, r.confidence);
     if (p.chunks?.length) db.prepare('UPDATE repos SET has_source=1 WHERE id=?').run(repoId);
   })();
   return repoId;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Architecture, Component, Connection } from '@cq/shared';
+import type { Architecture, Component, Connection, Flow } from '@cq/shared';
 import { api } from '../lib/api';
 import { langFromPath, TYPE_COLORS } from '../lib/format';
 import { useRepo } from '../lib/repoContext';
@@ -21,11 +21,47 @@ function PanelShell({ title, kicker, color, onClose, children }: { title: React.
   );
 }
 
-export function OverviewPanel({ arch, onClose, onSelect }: { arch: Architecture; onClose: () => void; onSelect: (id: string) => void }) {
-  const { askAbout } = useRepo();
+function FlowLinks({ flows, onOpenFlow }: { flows: Flow[]; onOpenFlow: (id: string) => void }) {
+  if (!flows.length) return null;
+  return (
+    <section>
+      <h4>Flows ({flows.length})</h4>
+      <div className="link-list">
+        {flows.map((f) => (
+          <button key={f.id} className="link-row" onClick={() => onOpenFlow(f.id)}>
+            <span className="arrow">⇄</span>
+            <span className="grow">{f.title}<div className="muted small">{f.trigger}</div></span>
+            <span className="muted small">{f.steps.length} steps</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function OverviewPanel({
+  arch,
+  flows,
+  onClose,
+  onSelect,
+  onOpenFlow,
+  onAsk,
+}: {
+  arch: Architecture;
+  flows: Flow[];
+  onClose: () => void;
+  onSelect: (id: string) => void;
+  onOpenFlow: (id: string) => void;
+  onAsk: (question: string) => void;
+}) {
+  const verified = arch.connections.filter((c) => c.confidence === 'verified').length;
   return (
     <PanelShell kicker="Architecture" title="System overview" onClose={onClose}>
       <Markdown>{arch.overview || '_No overview available._'}</Markdown>
+      {arch.connections.some((c) => c.confidence) && (
+        <div className="muted small">{verified} of {arch.connections.length} connections were verified against the code. Dotted arrows marked “?” are inferred.</div>
+      )}
+      <FlowLinks flows={flows} onOpenFlow={onOpenFlow} />
       <section>
         <h4>Components ({arch.components.length})</h4>
         <div className="link-list">
@@ -38,9 +74,14 @@ export function OverviewPanel({ arch, onClose, onSelect }: { arch: Architecture;
           ))}
         </div>
       </section>
-      <button className="btn primary" onClick={() => askAbout({ category: 'architecture', question: 'Walk me through how a typical request flows through these components.', autoSend: true })}>
-        Ask: trace a request end to end
-      </button>
+      <section>
+        <h4>Show me on the diagram</h4>
+        <div className="suggest">
+          {[...flows.slice(0, 2).map((f) => `What happens in "${f.title}"?`), 'How does a request travel from entry point to storage?', 'Which components talk to external systems?'].map((q) => (
+            <button key={q} onClick={() => onAsk(q)}>{q}</button>
+          ))}
+        </div>
+      </section>
     </PanelShell>
   );
 }
@@ -51,15 +92,19 @@ export function ComponentPanel({
   onClose,
   onSelectConnection,
   onDrill,
+  flows,
+  onOpenFlow,
 }: {
   comp: Component;
   arch: Architecture;
   onClose: () => void;
   onSelectConnection: (id: string) => void;
-  onSelectComponent: (id: string) => void;
   onDrill: () => void;
+  flows: Flow[];
+  onOpenFlow: (id: string) => void;
 }) {
-  const { repo, askAbout, openCode } = useRepo();
+  const { repo, askAbout, openCode, openFile } = useRepo();
+  const myFlows = flows.filter((f) => f.participants.some((p) => p.componentId === comp.id));
   const [files, setFiles] = useState<{ path: string; summary: string | null; lines: number }[] | null>(null);
   useEffect(() => {
     setFiles(null);
@@ -83,6 +128,27 @@ export function ComponentPanel({
           <ul>{comp.responsibilities.map((r, i) => <li key={i}>{r}</li>)}</ul>
         </section>
       )}
+      {(comp.layer || comp.group || comp.techStack?.length) && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+          {comp.layer && <span className="chip">layer: {comp.layer}</span>}
+          {comp.group && <span className="chip">group: {comp.group}</span>}
+          {comp.techStack?.map((t) => <span key={t} className="chip">{t}</span>)}
+        </div>
+      )}
+      {(comp.keyFiles?.length || comp.entryPoints?.length) ? (
+        <section>
+          <h4>Start reading here</h4>
+          <div className="link-list">
+            {[...new Set([...(comp.entryPoints ?? []), ...(comp.keyFiles ?? [])])].map((p) => (
+              <div key={p} className="link-row">
+                <button className="grow plain-btn mono small" onClick={() => openCode(p)}>{p}{comp.entryPoints?.includes(p) ? ' · entry' : ''}</button>
+                <button className="btn sm ghost" title="Explain this file" onClick={() => openFile(p)}>?</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      <FlowLinks flows={myFlows} onOpenFlow={onOpenFlow} />
       <section>
         <h4>Ask about {comp.name}</h4>
         <div className="suggest">
@@ -123,10 +189,11 @@ export function ComponentPanel({
           {!files && <span className="spinner" />}
           <div className="link-list">
             {files?.slice(0, 60).map((f) => (
-              <button key={f.path} className="link-row" onClick={() => openCode(f.path)} title={f.summary ?? ''}>
-                <span className="grow" style={{ fontFamily: 'var(--mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.path}</span>
+              <div key={f.path} className="link-row" title={f.summary ?? ''}>
+                <button className="grow plain-btn" style={{ fontFamily: 'var(--mono)', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', textAlign: 'left' }} onClick={() => openCode(f.path)}>{f.path}</button>
                 <span className="muted small">{f.lines}</span>
-              </button>
+                <button className="btn sm ghost" title="Explain this file" onClick={() => openFile(f.path)}>?</button>
+              </div>
             ))}
           </div>
         </section>
@@ -163,7 +230,19 @@ export function ConnectionPanel({ conn, arch, onClose, onSelectComponent }: { co
         <span className="muted">→ {conn.label} →</span>
         <button className="btn sm" onClick={() => onSelectComponent(conn.to)}>{to?.name}</button>
       </div>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+        {conn.confidence && <span className={`chip ${conn.confidence === 'verified' ? 'ok' : 'warn'}`}>{conn.confidence === 'verified' ? '✓ verified in code' : '? inferred, not verified'}</span>}
+        {conn.protocol && <span className="chip">{conn.protocol}</span>}
+        {conn.sync && <span className="chip">{conn.sync}</span>}
+        {conn.direction && conn.direction !== 'request' && <span className="chip">{conn.direction}</span>}
+      </div>
       <Markdown>{conn.description}</Markdown>
+      {conn.dataExchanged && (
+        <section>
+          <h4>Data exchanged</h4>
+          <div>{conn.dataExchanged}</div>
+        </section>
+      )}
       <section>
         <h4>Ask about this interaction</h4>
         <div className="suggest">

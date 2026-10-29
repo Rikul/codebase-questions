@@ -3,7 +3,18 @@
  * rather than precise: results seed the LLM prompts and power the offline heuristics.
  */
 export interface ImportRef { spec: string; line: number }
-export interface SymbolRef { name: string; kind: string; line: number; exported: boolean }
+export interface SymbolRef {
+  name: string;
+  kind: string;
+  line: number;
+  exported: boolean;
+  /** Last line of the definition body (inclusive). */
+  endLine?: number;
+  /** Enclosing class/module name for methods. */
+  parent?: string;
+  /** Trimmed definition line. */
+  signature?: string;
+}
 export interface RouteRef { method: string; path: string; line: number }
 export interface SignalRef { kind: string; detail: string; line: number }
 
@@ -54,20 +65,20 @@ function allMatches(text: string, re: RegExp, fn: (m: RegExpExecArray, line: num
 
 const IMPORT_PATTERNS: Record<string, RegExp[]> = {
   js: [
-    /^\s*import\s+(?:type\s+)?(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"]+)['"]/m,
-    /^\s*export\s+(?:type\s+)?[\w*{}\s,$]+\s+from\s+['"]([^'"]+)['"]/m,
+    /^[ \t]*import\s+(?:type\s+)?(?:[\w*{}\s,$]+\s+from\s+)?['"]([^'"]+)['"]/m,
+    /^[ \t]*export\s+(?:type\s+)?[\w*{}\s,$]+\s+from\s+['"]([^'"]+)['"]/m,
     /\brequire\(\s*['"]([^'"]+)['"]\s*\)/,
     /\bimport\(\s*['"]([^'"]+)['"]\s*\)/,
   ],
-  python: [/^\s*from\s+([.\w]+)\s+import\b/m, /^\s*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)/m],
-  go: [/^\s*import\s+"([^"]+)"/m, /^\s+(?:\w+\s+)?"([^"]+)"\s*$/m],
-  rust: [/^\s*(?:pub\s+)?use\s+([\w:]+)/m, /^\s*(?:pub\s+)?mod\s+(\w+)\s*;/m, /^\s*extern\s+crate\s+(\w+)/m],
-  java: [/^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/m],
-  kotlin: [/^\s*import\s+([\w.]+)/m],
-  csharp: [/^\s*using\s+([\w.]+)\s*;/m],
-  ruby: [/^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/m],
-  php: [/^\s*use\s+([\w\\]+)/m, /\b(?:require|include)(?:_once)?\s*\(?\s*['"]([^'"]+)['"]/],
-  c: [/^\s*#\s*include\s+"([^"]+)"/m],
+  python: [/^[ \t]*from\s+([.\w]+)\s+import\b/m, /^[ \t]*import\s+([\w.]+(?:\s*,\s*[\w.]+)*)/m],
+  go: [/^[ \t]*import\s+"([^"]+)"/m, /^[ \t]+(?:\w+\s+)?"([^"]+)"\s*$/m],
+  rust: [/^[ \t]*(?:pub\s+)?use\s+([\w:]+)/m, /^[ \t]*(?:pub\s+)?mod\s+(\w+)\s*;/m, /^[ \t]*extern\s+crate\s+(\w+)/m],
+  java: [/^[ \t]*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/m],
+  kotlin: [/^[ \t]*import\s+([\w.]+)/m],
+  csharp: [/^[ \t]*using\s+([\w.]+)\s*;/m],
+  ruby: [/^[ \t]*require(?:_relative)?\s+['"]([^'"]+)['"]/m],
+  php: [/^[ \t]*use\s+([\w\\]+)/m, /\b(?:require|include)(?:_once)?\s*\(?\s*['"]([^'"]+)['"]/],
+  c: [/^[ \t]*#\s*include\s+"([^"]+)"/m],
 };
 
 function langFamily(lang: string | null): string | null {
@@ -79,14 +90,19 @@ function langFamily(lang: string | null): string | null {
 
 const SYMBOL_PATTERNS: Record<string, { re: RegExp; kind: string }[]> = {
   js: [
-    { re: /^\s*(export\s+(?:default\s+)?)?(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/m, kind: 'function' },
-    { re: /^\s*(export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/m, kind: 'class' },
-    { re: /^\s*(export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)/m, kind: 'type' },
-    { re: /^\s*(export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/m, kind: 'function' },
-    { re: /^\s*(export\s+)?enum\s+([A-Za-z_$][\w$]*)/m, kind: 'enum' },
+    { re: /^[ \t]*(export\s+(?:default\s+)?)?(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/m, kind: 'function' },
+    { re: /^[ \t]*(export\s+(?:default\s+)?)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/m, kind: 'class' },
+    { re: /^[ \t]*(export\s+)?(?:interface|type)\s+([A-Za-z_$][\w$]*)/m, kind: 'type' },
+    { re: /^[ \t]*(export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[\w$]+)\s*=>/m, kind: 'function' },
+    { re: /^[ \t]*(export\s+)?enum\s+([A-Za-z_$][\w$]*)/m, kind: 'enum' },
+    { re: /^(export\s+(?:default\s+)?)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=/m, kind: 'variable' },
+    { re: /^[ \t]+()(?:(?:public|private|protected|static|async|override|readonly|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>\n]*>)?\([^)\n]*\)\s*(?::\s*[^{\n]+)?\{\s*$/m, kind: 'method' },
   ],
   python: [
     { re: /^()(?:async\s+)?def\s+([A-Za-z_]\w*)/m, kind: 'function' },
+    { re: /^[ \t]+()(?:async\s+)?def\s+([A-Za-z_]\w*)/m, kind: 'method' },
+    { re: /^()([A-Z][A-Z0-9_]{2,})\s*(?::[^=\n]+)?=/m, kind: 'constant' },
+    { re: /^()([a-z_][a-z0-9_]*)\s*(?::[^=\n]+)?=(?!=)/m, kind: 'variable' },
     { re: /^()class\s+([A-Za-z_]\w*)/m, kind: 'class' },
   ],
   go: [
@@ -94,32 +110,32 @@ const SYMBOL_PATTERNS: Record<string, { re: RegExp; kind: string }[]> = {
     { re: /^()type\s+([A-Za-z_]\w*)\s+(?:struct|interface)/m, kind: 'type' },
   ],
   rust: [
-    { re: /^\s*(pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/m, kind: 'function' },
-    { re: /^\s*(pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)/m, kind: 'type' },
+    { re: /^[ \t]*(pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/m, kind: 'function' },
+    { re: /^[ \t]*(pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait)\s+([A-Za-z_]\w*)/m, kind: 'type' },
   ],
   java: [
-    { re: /^\s*(public\s+)?(?:abstract\s+|final\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)/m, kind: 'class' },
-    { re: /^\s+(public\s+)?(?:static\s+|final\s+|synchronized\s+)*[\w<>[\],\s]+\s+([a-z]\w*)\s*\([^)]*\)\s*(?:throws [\w.,\s]+)?\{/m, kind: 'method' },
+    { re: /^[ \t]*(public\s+)?(?:abstract\s+|final\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)/m, kind: 'class' },
+    { re: /^[ \t]+(public\s+)?(?:static\s+|final\s+|synchronized\s+)*[\w<>[\],\s]+\s+([a-z]\w*)\s*\([^)]*\)\s*(?:throws [\w.,\s]+)?\{/m, kind: 'method' },
   ],
   kotlin: [
-    { re: /^\s*()(?:data\s+|sealed\s+|open\s+)?class\s+([A-Za-z_]\w*)/m, kind: 'class' },
-    { re: /^\s*()(?:suspend\s+)?fun\s+(?:<[^>]+>\s*)?([A-Za-z_]\w*)/m, kind: 'function' },
+    { re: /^[ \t]*()(?:data\s+|sealed\s+|open\s+)?class\s+([A-Za-z_]\w*)/m, kind: 'class' },
+    { re: /^[ \t]*()(?:suspend\s+)?fun\s+(?:<[^>]+>\s*)?([A-Za-z_]\w*)/m, kind: 'function' },
   ],
-  csharp: [{ re: /^\s*(public\s+)?(?:static\s+|sealed\s+|abstract\s+|partial\s+)*(?:class|interface|record|struct)\s+([A-Za-z_]\w*)/m, kind: 'class' }],
+  csharp: [{ re: /^[ \t]*(public\s+)?(?:static\s+|sealed\s+|abstract\s+|partial\s+)*(?:class|interface|record|struct)\s+([A-Za-z_]\w*)/m, kind: 'class' }],
   ruby: [
-    { re: /^\s*()class\s+([A-Z]\w*(?:::\w+)*)/m, kind: 'class' },
-    { re: /^\s*()module\s+([A-Z]\w*)/m, kind: 'module' },
-    { re: /^\s*()def\s+(?:self\.)?([a-z_]\w*[?!]?)/m, kind: 'method' },
+    { re: /^[ \t]*()class\s+([A-Z]\w*(?:::\w+)*)/m, kind: 'class' },
+    { re: /^[ \t]*()module\s+([A-Z]\w*)/m, kind: 'module' },
+    { re: /^[ \t]*()def\s+(?:self\.)?([a-z_]\w*[?!]?)/m, kind: 'method' },
   ],
   php: [
-    { re: /^\s*()(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)/m, kind: 'class' },
-    { re: /^\s*(public\s+)?(?:static\s+)?function\s+([A-Za-z_]\w*)/m, kind: 'function' },
+    { re: /^[ \t]*()(?:final\s+|abstract\s+)?class\s+([A-Za-z_]\w*)/m, kind: 'class' },
+    { re: /^[ \t]*(public\s+)?(?:static\s+)?function\s+([A-Za-z_]\w*)/m, kind: 'function' },
   ],
 };
 
 const ROUTE_PATTERNS: RegExp[] = [
   // express / koa / fastify / hono style: app.get('/x', ...), router.post("/y")
-  /\b(?:app|router|server|api|route|routes|fastify|r|e|g|mux)\.(get|post|put|patch|delete|options|head|all|use)\(\s*['"`]([^'"`]+)['"`]/i,
+  /(?:\b[\w$]*(?:app|router|server|api|routes?|fastify)|\b(?:r|e|g|mux))\.(get|post|put|patch|delete|options|head|all|use)\(\s*['"`]([^'"`]+)['"`]/i,
   // Flask / FastAPI: @app.get("/x"), @router.post("/x"), @app.route("/x", methods=[...])
   /@\w+\.(get|post|put|patch|delete|route|api_route|websocket)\(\s*['"]([^'"]+)['"]/i,
   // Spring: @GetMapping("/x")
@@ -130,9 +146,9 @@ const ROUTE_PATTERNS: RegExp[] = [
   // Django urls: path('x/', view)
   /\b(?:re_)?path\(\s*r?['"]([^'"]*)['"]\s*,/,
   // Rails: get '/x', to: ...
-  /^\s*(get|post|put|patch|delete|resources|resource)\s+[:'"]([\w/:.-]+)/m,
+  /^[ \t]*(get|post|put|patch|delete|resources|resource)\s+[:'"]([\w/:.-]+)/m,
   // Next.js / Remix handlers: export async function GET(
-  /^\s*export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\s*\(()/m,
+  /^[ \t]*export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE)\s*\(()/m,
 ];
 
 const ENV_PATTERNS: RegExp[] = [
@@ -209,20 +225,21 @@ export function parseFile(p: string, lang: string | null, content: string): File
     if (fam === 'go') {
       // Only keep import-looking strings from import blocks.
       const block = text.match(/import\s*\(([\s\S]*?)\)/);
-      facts.imports = facts.imports.filter((i) => !block || block[1].includes(`"${i.spec}"`) || /^\s*import\s+"/m.test(text));
+      facts.imports = facts.imports.filter((i) => !block || block[1].includes(`"${i.spec}"`) || /^[ \t]*import\s+"/m.test(text));
     }
     const symFam = SYMBOL_PATTERNS[fam] ? fam : lang && SYMBOL_PATTERNS[lang] ? lang : null;
     if (symFam) {
       for (const { re, kind } of SYMBOL_PATTERNS[symFam]) {
         allMatches(text, re, (m, line) => {
           const name = m[2];
-          if (!name || ['if', 'for', 'while', 'switch', 'catch', 'return', 'new'].includes(name)) return;
+          if (!name || ['if', 'for', 'while', 'switch', 'catch', 'return', 'new', 'constructor', 'function', 'else', 'do', 'try'].includes(name)) return;
           let exported = Boolean(m[1]);
           if (fam === 'go') exported = /^[A-Z]/.test(name);
           if (fam === 'python') exported = !name.startsWith('_');
           facts.symbols.push({ name, kind, line, exported });
         });
       }
+      facts.symbols = computeRanges(text.split('\n'), facts.symbols, fam);
     }
   }
 
@@ -239,6 +256,22 @@ export function parseFile(p: string, lang: string | null, content: string): File
       if (!route && !/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return;
       facts.routes.push({ method: method.toUpperCase(), path: route || `/${p.replace(/\/route\.\w+$/, '')}`, line });
     });
+  }
+  // Inline route handlers become pseudo-symbols so call sites inside them have a meaningful "caller".
+  if (fam && BRACE_FAMS.has(fam)) {
+    const lines = text.split('\n');
+    for (const r of facts.routes) {
+      const l = lines[r.line - 1] ?? '';
+      if (!/=>|function\b/.test(l) || facts.symbols.some((s) => s.line === r.line)) continue;
+      const end = braceEnd(lines, r.line - 1);
+      facts.symbols.push({ name: `${r.method} ${r.path}`, kind: 'route', line: r.line, endLine: (end ?? r.line - 1) + 1, exported: false, signature: l.trim().slice(0, 200) });
+    }
+  } else if (fam === 'python') {
+    // Decorated route functions: attach the route to the following def.
+    for (const r of facts.routes) {
+      const def = facts.symbols.find((s) => s.line > r.line && s.line <= r.line + 3 && (s.kind === 'function' || s.kind === 'method'));
+      if (def) def.signature = `${r.method} ${r.path} → ${def.signature}`;
+    }
   }
   for (const re of ENV_PATTERNS) allMatches(text, re, (m, line) => facts.envVars.push({ kind: 'env', detail: m[1], line }));
 
@@ -294,7 +327,7 @@ export function parseManifest(p: string, content: string): Dependency[] {
       const poetry = content.match(/\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/);
       if (poetry) for (const m of poetry[1].matchAll(/^([A-Za-z0-9_.\-]+)\s*=\s*['"{]?([^'"\n}]*)/gm)) if (m[1] !== 'python') push(m[1], m[2], 'pypi');
     } else if (base === 'go.mod') {
-      for (const m of content.matchAll(/^\s*(?:require\s+)?([\w.\-]+\.[\w.\-/]+)\s+(v[\w.\-+]+)/gm)) push(m[1], m[2], 'go');
+      for (const m of content.matchAll(/^[ \t]*(?:require\s+)?([\w.\-]+\.[\w.\-/]+)\s+(v[\w.\-+]+)/gm)) push(m[1], m[2], 'go');
     } else if (base === 'Cargo.toml') {
       const sections = content.split(/^\[/m);
       for (const s of sections) {
@@ -309,7 +342,7 @@ export function parseManifest(p: string, content: string): Dependency[] {
       for (const m of content.matchAll(/(implementation|api|compile|testImplementation)\s*\(?\s*['"]([^:'"]+:[^:'"]+):?([^'"]*)['"]/g))
         push(m[2], m[3], 'maven', m[1].startsWith('test'));
     } else if (base === 'Gemfile') {
-      for (const m of content.matchAll(/^\s*gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?/gm)) push(m[1], m[2] ?? '', 'rubygems');
+      for (const m of content.matchAll(/^[ \t]*gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?/gm)) push(m[1], m[2] ?? '', 'rubygems');
     } else if (base === 'composer.json') {
       const j = JSON.parse(content);
       for (const [n, v] of Object.entries(j.require ?? {})) push(n, String(v), 'packagist');
@@ -323,3 +356,117 @@ export function parseManifest(p: string, content: string): Dependency[] {
 }
 
 export const MANIFEST_NAMES = /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|go\.mod|Cargo\.toml|pom\.xml|build\.gradle(\.kts)?|Gemfile|composer\.json|[^/]+\.csproj)$/;
+
+// ---------- Symbol ranges ----------
+
+const BRACE_FAMS = new Set(['js', 'go', 'rust', 'java', 'kotlin', 'csharp', 'php', 'c', 'scala', 'swift']);
+const CONTAINER_KINDS = new Set(['class', 'type', 'module', 'enum']);
+
+function indentOf(l: string): number {
+  const m = l.match(/^[ \t]*/)![0];
+  return m.replace(/\t/g, '    ').length;
+}
+
+/** Find the line where the brace block opened at/after `start` closes. Strings and comments are skipped roughly. */
+function braceEnd(lines: string[], start: number): number | null {
+  let depth = 0;
+  let opened = false;
+  let inBlock = false;
+  for (let i = start; i < Math.min(lines.length, start + 5000); i++) {
+    const l = lines[i];
+    let quote: string | null = null;
+    for (let j = 0; j < l.length; j++) {
+      const c = l[j];
+      if (inBlock) {
+        if (c === '*' && l[j + 1] === '/') {
+          inBlock = false;
+          j++;
+        }
+        continue;
+      }
+      if (quote) {
+        if (c === '\\') j++;
+        else if (c === quote) quote = null;
+        continue;
+      }
+      if (c === '/' && l[j + 1] === '/') break;
+      if (c === '/' && l[j + 1] === '*') {
+        inBlock = true;
+        j++;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') quote = c;
+      else if (c === '{') {
+        depth++;
+        opened = true;
+      } else if (c === '}') {
+        depth--;
+        if (opened && depth <= 0) return i;
+      }
+    }
+    // Statement without a block (e.g. `const x = 1;` or an expression arrow fn).
+    if (!opened && i - start >= 0 && /[;,)]\s*$/.test(l.trim()) && !/[({[]\s*$/.test(l)) return i;
+    if (!opened && i - start > 6) return start;
+  }
+  return null;
+}
+
+export function computeRanges(lines: string[], symbols: SymbolRef[], fam: string): SymbolRef[] {
+  const seen = new Set<string>();
+  const syms = symbols
+    .sort((a, b) => a.line - b.line)
+    .filter((s) => {
+      const k = `${s.name}:${s.line}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  for (const s of syms) {
+    const i = s.line - 1;
+    s.signature = (lines[i] ?? '').trim().slice(0, 200);
+    let end: number | null = null;
+    if (BRACE_FAMS.has(fam)) end = braceEnd(lines, i);
+    else if (fam === 'python') {
+      const ind = indentOf(lines[i] ?? '');
+      end = i;
+      for (let j = i + 1; j < lines.length; j++) {
+        const l = lines[j];
+        if (!l.trim()) continue;
+        if (indentOf(l) <= ind && !/^[ \t]*[)\]}]/.test(l)) break;
+        end = j;
+      }
+      if (s.kind === 'constant') end = i;
+    } else if (fam === 'ruby') {
+      const ind = indentOf(lines[i] ?? '');
+      for (let j = i + 1; j < lines.length; j++) {
+        if (/^[ \t]*end\b/.test(lines[j]) && indentOf(lines[j]) === ind) {
+          end = j;
+          break;
+        }
+      }
+    }
+    s.endLine = (end ?? i) + 1;
+  }
+  // Parents: innermost container whose range strictly contains the symbol.
+  for (const s of syms) {
+    let best: SymbolRef | undefined;
+    for (const c of syms) {
+      if (c === s || !CONTAINER_KINDS.has(c.kind) || !c.endLine) continue;
+      if (c.line < s.line && c.endLine >= (s.endLine ?? s.line) && (!best || c.line > best.line)) best = c;
+    }
+    if (best) s.parent = best.name;
+    // A "method" match outside any container is really a nested function or a false positive.
+    if (s.kind === 'method' && !best && fam === 'js') s.kind = 'function';
+  }
+  // Drop JS "methods" that are actually control flow inside functions (no container, deeply nested).
+  return syms.filter((s) => !(fam === 'js' && s.kind === 'function' && !s.parent && /^\s{4,}/.test(lines[s.line - 1] ?? '') && !/^[ \t]*(export|async|function)/.test(lines[s.line - 1] ?? '')));
+}
+
+/** Innermost symbol containing a line. */
+export function enclosingSymbol(symbols: SymbolRef[], line: number): SymbolRef | undefined {
+  let best: SymbolRef | undefined;
+  for (const s of symbols) {
+    if (s.line <= line && (s.endLine ?? s.line) >= line && (!best || s.line >= best.line)) best = s;
+  }
+  return best;
+}

@@ -15,13 +15,47 @@ import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import { answerQuestion } from '../qa/answer.js';
 import { invalidateVectors } from '../qa/retrieve.js';
 import { fileContent, fileTree, getArchitecture, snippet } from './queries.js';
+import { clickableIdentifiers, explain } from '../agent/explain.js';
+import { answerOnDiagram } from '../agent/diagram.js';
+import { listFlows, saveFlows, traceFlow } from '../analyze/flows.js';
 
 const AskSchema = z.object({
   question: z.string().min(1).max(4000),
   category: CategorySchema.optional(),
   conversationId: z.number().int().optional(),
-  focus: z.object({ componentId: z.string().optional(), connectionId: z.string().optional(), path: z.string().optional() }).optional(),
+  focus: z
+    .object({
+      componentId: z.string().optional(),
+      connectionId: z.string().optional(),
+      path: z.string().optional(),
+      symbol: z.object({ name: z.string().optional(), line: z.number().int().optional() }).optional(),
+      snippet: z.object({ text: z.string().max(20_000), startLine: z.number().int().optional(), endLine: z.number().int().optional() }).optional(),
+    })
+    .optional(),
 });
+
+const ExplainSchema = z.object({
+  path: z.string().min(1),
+  symbol: z.object({ name: z.string().max(200).optional(), line: z.number().int().optional() }).optional(),
+  snippet: z.object({ text: z.string().min(1).max(20_000), startLine: z.number().int().optional(), endLine: z.number().int().optional() }).optional(),
+  refresh: z.boolean().optional(),
+});
+const QuestionSchema = z.object({ question: z.string().min(1).max(1000), refresh: z.boolean().optional(), save: z.boolean().optional() });
+
+/** Run an agent task over SSE, forwarding its events until it finishes or the client leaves. */
+async function streamTask(res: Response, task: (emit: (e: unknown) => void, isClosed: () => boolean) => Promise<void>) {
+  const send = sse(res);
+  let closed = false;
+  res.on('close', () => (closed = true));
+  try {
+    await task((e) => {
+      if (!closed) send(e);
+    }, () => closed);
+  } catch (err) {
+    if (!closed) send({ type: 'error', message: (err as Error).message });
+  }
+  res.end();
+}
 
 function sse(res: Response) {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -197,7 +231,7 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const content = fileContent(db, req.params.id, p);
     if (content == null) return void res.status(404).json({ error: 'File not found' });
     const meta = db.prepare('SELECT lang, summary, meta FROM files WHERE repo_id=? AND path=?').get(req.params.id, p) as any;
-    const symbols = db.prepare('SELECT name, kind, line, exported FROM symbols WHERE repo_id=? AND path=? ORDER BY line').all(req.params.id, p);
+    const symbols = db.prepare('SELECT name, kind, line, end_line AS endLine, exported, parent, signature FROM symbols WHERE repo_id=? AND path=? ORDER BY line').all(req.params.id, p);
     const importsOut = db.prepare(`SELECT dst AS path, line FROM file_edges WHERE repo_id=? AND src=?`).all(req.params.id, p);
     const importedBy = db.prepare(`SELECT src AS path, line FROM file_edges WHERE repo_id=? AND dst=?`).all(req.params.id, p);
     res.json({ path: p, lang: meta.lang, summary: meta.summary, meta: json(meta.meta, {}), content, symbols, imports: importsOut, importedBy });
@@ -244,6 +278,56 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       send({ type: 'error', message: (err as Error).message } satisfies AskEvent);
     }
     res.end();
+  });
+
+  r.post('/repos/:id/explain', async (req, res) => {
+    const row = getRepo(req, res);
+    if (!row) return;
+    const parsed = ExplainSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
+    await streamTask(res, (emit) => explain(db, llm, embeddings, row.id, parsed.data, emit));
+  });
+
+  r.get('/repos/:id/identifiers', (req, res) => {
+    if (!getRepo(req, res)) return;
+    const p = typeof req.query.path === 'string' ? req.query.path : '';
+    res.json(clickableIdentifiers(db, req.params.id, p));
+  });
+
+  r.get('/repos/:id/explanations', (req, res) => {
+    if (!getRepo(req, res)) return;
+    const p = typeof req.query.path === 'string' ? req.query.path : '';
+    const rows = db.prepare(`SELECT key, created_at FROM explanations WHERE repo_id=? AND (key = ? OR key LIKE ?)`).all(req.params.id, `file:${p}`, `sym:${p}#%`) as any[];
+    res.json(rows.map((r) => ({ key: r.key, createdAt: r.created_at })));
+  });
+
+  r.get('/repos/:id/flows', (req, res) => {
+    if (getRepo(req, res)) res.json(listFlows(db, req.params.id));
+  });
+
+  r.post('/repos/:id/flows', async (req, res) => {
+    const row = getRepo(req, res);
+    if (!row) return;
+    const parsed = QuestionSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
+    await streamTask(res, async (emit) => {
+      const flow = await traceFlow(db, llm, embeddings, row.id, parsed.data.question, emit);
+      if (flow && parsed.data.save !== false) saveFlows(db, row.id, [flow], false);
+    });
+  });
+
+  r.delete('/repos/:id/flows/:fid', (req, res) => {
+    if (!getRepo(req, res)) return;
+    db.prepare('DELETE FROM flows WHERE repo_id=? AND id=?').run(req.params.id, req.params.fid);
+    res.json({ ok: true });
+  });
+
+  r.post('/repos/:id/diagram/answer', async (req, res) => {
+    const row = getRepo(req, res);
+    if (!row) return;
+    const parsed = QuestionSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
+    await streamTask(res, (emit) => answerOnDiagram(db, llm, embeddings, row.id, parsed.data.question, Boolean(parsed.data.refresh), emit));
   });
 
   r.get('/repos/:id/export', (req, res) => {

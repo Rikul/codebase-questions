@@ -3,6 +3,7 @@ import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic.js';
 import { MockProvider } from './mock.js';
 import { DEFAULT_OPENAI_MODEL, OpenAIEmbeddings, OpenAIProvider } from './openai.js';
 import type { EmbeddingProvider, JSONOptions, LLMProvider } from './provider.js';
+import type { AgentOptions, AgentResult } from './agent.js';
 
 export type { LLMProvider, EmbeddingProvider } from './provider.js';
 
@@ -40,5 +41,18 @@ export async function jsonWithFallback<T>(
     if (!opts.heuristic) throw err;
     onWarn?.(`${opts.name}: model call failed (${(err as Error).message}); using static analysis instead`);
     return opts.schema.parse(opts.heuristic());
+  }
+}
+
+/** Agent run that falls back to the scripted (static) investigation if the model run fails. */
+export async function agentWithFallback<T>(llm: LLMProvider, opts: AgentOptions<T>, onWarn?: (msg: string) => void): Promise<AgentResult<T>> {
+  try {
+    const r = await llm.runAgent(opts);
+    if (opts.final && r.final === undefined) throw new Error('model did not submit a final answer');
+    return r;
+  } catch (err) {
+    if (!opts.scripted || llm.name === 'mock') throw err;
+    onWarn?.(`agent run failed (${(err as Error).message}); using static analysis instead`);
+    return new MockProvider().runAgent(opts);
   }
 }

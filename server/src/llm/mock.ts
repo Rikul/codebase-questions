@@ -1,3 +1,5 @@
+import type { AgentOptions, AgentResult } from './agent.js';
+import { AgentSession } from './agent.js';
 import type { CompleteOptions, JSONOptions, LLMProvider } from './provider.js';
 
 /**
@@ -21,5 +23,23 @@ export class MockProvider implements LLMProvider {
   async *stream(opts: CompleteOptions): AsyncIterable<string> {
     const text = await this.complete(opts);
     for (const part of text.match(/[\s\S]{1,40}/g) ?? []) yield part;
+  }
+
+  /** Runs the call site's scripted investigation: real tool calls, deterministic composition. */
+  async runAgent<T>(opts: AgentOptions<T>): Promise<AgentResult<T>> {
+    const session = new AgentSession(opts);
+    if (!opts.scripted) throw new Error('Mock provider needs a scripted run');
+    let text = '';
+    const emit = (t: string) => {
+      for (const part of t.match(/[\s\S]{1,60}/g) ?? []) {
+        text += part;
+        opts.onEvent?.({ type: 'text', text: part });
+      }
+    };
+    const out = await opts.scripted(session.caller(), emit);
+    if (out.text && !text) emit(out.text);
+    let final = out.final;
+    if (opts.final && final !== undefined) final = opts.final.schema.parse(final);
+    return { text: text || out.text || '', final, steps: session.calls.length, toolCalls: session.calls };
   }
 }

@@ -308,3 +308,101 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
   .tree.show { display: block; position: absolute; z-index: 10; height: 100%; }
   .legend { display: none; }
 }
+
+/* ---------- agent trace ---------- */
+.trace { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+.trace-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; background: transparent; color: var(--text-2); cursor: pointer; font-size: 12.5px; text-align: left; }
+.trace-list { list-style: none; margin: 0; padding: 0 8px 8px; display: grid; gap: 2px; max-height: 260px; overflow: auto; }
+.trace-step { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 4px; border-radius: 5px; min-width: 0; }
+.trace-step .ti { width: 18px; text-align: center; flex: none; }
+.trace-step .grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-step .ts { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-step.error { color: var(--danger); }
+.trace-note { font-size: 12.5px; color: var(--text-2); font-style: italic; padding: 3px 4px 3px 30px; }
+.narration { font-style: italic; white-space: pre-wrap; }
+
+/* ---------- explain panel ---------- */
+.panel.explain { width: 420px; }
+.kicker { color: var(--text-3); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-title { font-size: 16px; margin-top: 2px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-section { border-top: 1px solid var(--border); padding-top: 10px; }
+.x-head { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; padding: 0; cursor: pointer; color: var(--text); text-align: left; }
+.x-head h4 { margin: 0 !important; flex: 1; color: var(--text) !important; text-transform: none !important; letter-spacing: 0 !important; font-size: 13.5px !important; }
+.x-body { margin-top: 8px; }
+.sig { margin: 0; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow: auto; font-size: 12px; }
+.chip.kind { min-width: 64px; justify-content: center; }
+.chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); }
+code.plain { background: none !important; border: 0 !important; padding: 0 !important; font-weight: 600; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mono { font-family: var(--mono); }
+.plain-btn { border: 0; background: transparent; color: inherit; text-align: left; padding: 0; cursor: pointer; font: inherit; min-width: 0; overflow: hidden; }
+.link-row.static { cursor: default; }
+.link-row.static:hover { background: transparent; }
+
+/* ---------- clickable code ---------- */
+.code-scroll.clickable .ident { cursor: pointer; border-bottom: 1px dotted color-mix(in srgb, var(--accent) 50%, transparent); }
+.code-scroll.clickable .ident:hover { background: var(--accent-soft); border-bottom-style: solid; border-bottom-color: var(--accent); }
+.code-table tr.active { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.code-table td.ln { user-select: none; }
+.sel-btn { position: absolute; z-index: 5; border: 0; border-radius: 999px; background: var(--accent); color: #fff; padding: 5px 12px; font-size: 12.5px; font-weight: 600; box-shadow: var(--shadow-lg); cursor: pointer; }
+.modal.wide { max-width: 1320px; }
+.modal-split { display: flex; min-height: 0; flex: 1; }
+.modal-split .body { flex: 1; min-width: 0; }
+.modal-split .panel { border-left: 1px solid var(--border); max-height: calc(88vh - 70px); }
+.files .panel.explain { min-height: 0; }
+
+/* ---------- architecture shell ---------- */
+.arch-shell { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.arch-top { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.arch-body { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+.seg button { border: 0; background: transparent; color: var(--text-2); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 13px; }
+.seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.ask-diagram { display: flex; gap: 6px; padding: 4px; align-items: center; }
+.ask-diagram .input { height: 28px; width: 320px; max-width: 46vw; font-size: 13px; }
+.group-node { width: 100%; height: 100%; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.group-node span { position: absolute; top: 8px; left: 14px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); }
+.react-flow__node-group { background: transparent !important; border: 0 !important; padding: 0 !important; }
+.comp-node .layer { float: right; font-weight: 600; color: var(--text-3); letter-spacing: .04em; }
+.comp-node.lit { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent), var(--shadow-lg); }
+.tour { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 6; width: min(560px, calc(100% - 32px)); padding: 12px 14px; }
+.tour-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.tour-list li.active b { color: var(--accent); }
+
+/* ---------- flows ---------- */
+.flows { flex: 1; display: flex; min-height: 0; min-width: 0; }
+.flow-list { width: 280px; border-right: 1px solid var(--border); background: var(--surface); overflow: auto; padding: 10px 8px 8px; display: grid; gap: 4px; align-content: start; }
+.trace-form { display: flex; gap: 6px; margin-bottom: 6px; }
+.trace-form .input { height: 30px; font-size: 13px; }
+.flow-item { display: grid; gap: 2px; text-align: left; border: 1px solid transparent; background: transparent; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text); }
+.flow-item:hover { background: var(--surface-2); }
+.flow-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.flow-main { flex: 1; overflow: auto; padding: 20px 24px 24px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+.flow-head { display: flex; gap: 8px; align-items: flex-start; }
+.seq-wrap { overflow: auto; padding: 8px; }
+.seq .lifeline { stroke: var(--border-strong); stroke-dasharray: 4 4; }
+.seq .seq-actor { fill: var(--surface); stroke-width: 1.5; }
+.seq .seq-actor-label { fill: var(--text); font-size: 12.5px; font-weight: 600; }
+.seq .seq-label { fill: var(--text-2); font-size: 11.5px; font-family: var(--mono); }
+.seq .seq-num { fill: var(--text-3); font-size: 11px; }
+.seq .seq-hit { fill: transparent; }
+.seq .seq-step { cursor: pointer; }
+.seq .seq-step:hover .seq-hit, .seq .seq-step.active .seq-hit { fill: var(--accent-soft); }
+.seq .seq-step.active .seq-label { fill: var(--accent); font-weight: 600; }
+.step-list { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
+.step-list li { padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+.step-list li > .grow { display: inline; }
+.step-list li .cite { float: right; }
+.step-list li:hover, .step-list li.active { background: var(--surface-2); }
+
+@media (max-width: 860px) {
+  .flow-list { display: none; }
+  .ask-diagram .input { width: 180px; }
+  .modal-split .panel { position: static; width: 100%; }
+  .modal-split { flex-direction: column; }
+}
+
+/* Grid rows size to content (scrollable children must not shrink), and columns may not grow past the panel. */
+.panel-body, .flow-main, .insights-inner { grid-auto-rows: max-content; grid-template-columns: minmax(0, 1fr); }
+.seq-wrap { overflow-x: auto; overflow-y: hidden; }

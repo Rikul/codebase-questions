@@ -27,12 +27,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const post = <T>(path: string, body?: unknown) => api<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
 
-/** POST a question and stream SSE events back. */
-export async function ask(repoId: string, req: AskRequest, onEvent: (ev: AskEvent) => void, signal?: AbortSignal) {
-  const res = await fetch(`/api/repos/${encodeURIComponent(repoId)}/ask`, {
+/** POST JSON and stream back server-sent events. */
+export async function streamPost<E>(path: string, body: unknown, onEvent: (ev: E) => void, signal?: AbortSignal) {
+  const res = await fetch(`/api${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
+    body: JSON.stringify(body),
     signal,
   });
   if (res.status === 401) authEvents.dispatchEvent(new Event('unauthorized'));
@@ -64,4 +64,9 @@ export async function ask(repoId: string, req: AskRequest, onEvent: (ev: AskEven
       if (data) onEvent(JSON.parse(data));
     }
   }
+}
+
+/** POST a question and stream answer events back. */
+export function ask(repoId: string, req: AskRequest, onEvent: (ev: AskEvent) => void, signal?: AbortSignal) {
+  return streamPost<AskEvent>(`/repos/${encodeURIComponent(repoId)}/ask`, req, onEvent, signal);
 }

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import type { Architecture, FileNode } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
-import { repoDir } from '../ingest/pipeline.js';
+import { repoDir } from '../paths.js';
 import { safeJoin } from '../ingest/scan.js';
 
 export function getArchitecture(db: DB, repoId: string): Architecture {
@@ -14,6 +14,7 @@ export function getArchitecture(db: DB, repoId: string): Architecture {
     description: c.description,
     responsibilities: json<string[]>(c.responsibilities, []),
     paths: json<string[]>(c.paths, []),
+    ...json<Record<string, unknown>>(c.extra, {}),
   }));
   const connections = (db.prepare('SELECT * FROM connections WHERE repo_id=?').all(repoId) as any[]).map((e) => ({
     id: e.id,
@@ -23,6 +24,7 @@ export function getArchitecture(db: DB, repoId: string): Architecture {
     label: e.label,
     description: e.description,
     evidence: json<any[]>(e.evidence, []),
+    ...json<Record<string, unknown>>(e.extra, {}),
   }));
   return { overview: repo?.overview ?? '', components, connections };
 }

@@ -16,14 +16,16 @@ import { cloneRepo, parseRepoUrl } from './clone.js';
 import { buildImportGraph, centrality, groupModules, moduleEdges, moduleOf } from './graph.js';
 import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
 import type { FileFacts } from './parse.js';
+import { buildRefs } from './refs.js';
+import { repoDir } from '../paths.js';
+import { analyzeFlows, saveFlows } from '../analyze/flows.js';
+import { RepoIndex } from '../agent/tools.js';
 import { scanRepo } from './scan.js';
 
 export const jobEvents = new EventEmitter();
 jobEvents.setMaxListeners(0);
 
-export function repoDir(repoId: string) {
-  return path.join(config.reposDir, repoId);
-}
+export { repoDir };
 
 export function rowToRepo(r: any): RepoSummary {
   return {
@@ -182,7 +184,9 @@ export async function analyzeDirectory(
      ON CONFLICT(repo_id, path) DO UPDATE SET lang=excluded.lang, size=excluded.size, hash=excluded.hash, lines=excluded.lines, meta=excluded.meta`,
   );
   const insEdge = db.prepare('INSERT OR IGNORE INTO file_edges (repo_id, src, dst, kind, line) VALUES (?, ?, ?, ?, ?)');
-  const insSym = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported) VALUES (?, ?, ?, ?, ?, ?)');
+  const insSym = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const insRef = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const refs = buildRefs(files, facts, graph);
   const insChunk = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)');
   const chunkIds: { id: number; text: string }[] = [];
   db.transaction(() => {
@@ -194,13 +198,14 @@ export async function analyzeDirectory(
       const fx = facts.get(f.path)!;
       const meta = { routes: fx.routes, security: fx.security, infra: fx.infra, env: fx.envVars, isEntry: fx.isEntry, isTest: fx.isTest, module: fileToModule.get(f.path) };
       insFile.run(repoId, f.path, f.lang, f.size, f.hash, f.lines, JSON.stringify(meta));
-      for (const s of fx.symbols) insSym.run(repoId, f.path, s.name, s.kind, s.line, s.exported ? 1 : 0);
+      for (const s of fx.symbols) insSym.run(repoId, f.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine ?? s.line, s.parent ?? null, s.signature ?? null);
       for (const c of chunkFile(f.path, f.content)) {
         const info = insChunk.run(repoId, c.path, c.startLine, c.endLine, c.content);
         chunkIds.push({ id: Number(info.lastInsertRowid), text: `${c.path}\n${c.content}` });
       }
     }
     for (const e of graph.edges) insEdge.run(repoId, e.from, e.to, e.kind, e.line);
+    for (const r of refs) insRef.run(repoId, r.name, r.path, r.line, r.kind, r.fromSymbol, r.targetPath, r.targetLine, r.confidence);
     for (const [f, pkgs] of graph.external) for (const p of pkgs) insEdge.run(repoId, f, `pkg:${p}`, 'package', null);
   })();
 
@@ -219,6 +224,7 @@ export async function analyzeDirectory(
     }
   }
 
+  ctx.index = new RepoIndex(db, repoId, embeddings);
   progress('summarize', 'Summarizing key files', 0.25);
   ctx.progress = (m, p) => progress('summarize', m, 0.25 + 0.35 * p);
   const fromModel = await summarizeFiles(ctx, { max: config.ingest.maxLlmFiles, concurrency: config.llm.concurrency, cached });
@@ -231,6 +237,7 @@ export async function analyzeDirectory(
   })();
 
   progress('architecture', 'Synthesizing architecture', 0.62);
+  ctx.progress = (m, p) => progress('architecture', m, 0.62 + 0.1 * p);
   const arch = await analyzeArchitecture(ctx);
   const fileComp = assignFilesToComponents(ctx, arch);
 
@@ -244,6 +251,13 @@ export async function analyzeDirectory(
   db.transaction(() => {
     for (const [p, c] of fileComp) updMeta.run(c, repoId, p);
   })();
+
+  progress('flows', 'Tracing key flows for sequence diagrams', 0.985);
+  try {
+    saveFlows(db, repoId, await analyzeFlows(llm, ctx.index, warn));
+  } catch (err) {
+    warn(`Flow tracing failed: ${(err as Error).message}`);
+  }
   return { architecture: arch };
 }
 
@@ -258,10 +272,16 @@ export function saveAnalysis(
     for (const t of ['components', 'connections', 'insights', 'suggested_questions']) db.prepare(`DELETE FROM ${t} WHERE repo_id=?`).run(repoId);
     if (arch) {
       db.prepare('UPDATE repos SET overview=? WHERE id=?').run(arch.overview, repoId);
-      const ic = db.prepare('INSERT INTO components (repo_id, id, name, type, description, responsibilities, paths) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      for (const c of arch.components) ic.run(repoId, c.id, c.name, c.type, c.description, JSON.stringify(c.responsibilities), JSON.stringify(c.paths));
-      const ie = db.prepare('INSERT INTO connections (repo_id, id, src, dst, kind, label, description, evidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const e of arch.connections) ie.run(repoId, e.id, e.from, e.to, e.kind, e.label, e.description, JSON.stringify(e.evidence));
+      const ic = db.prepare('INSERT INTO components (repo_id, id, name, type, description, responsibilities, paths, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const c of arch.components) {
+        const { id, name, type, description, responsibilities, paths, ...extra } = c;
+        ic.run(repoId, id, name, type, description, JSON.stringify(responsibilities ?? []), JSON.stringify(paths ?? []), JSON.stringify(extra));
+      }
+      const ie = db.prepare('INSERT INTO connections (repo_id, id, src, dst, kind, label, description, evidence, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const e of arch.connections) {
+        const { id, from, to, kind, label, description, evidence, ...extra } = e;
+        ie.run(repoId, id, from, to, kind, label, description, JSON.stringify(evidence ?? []), JSON.stringify(extra));
+      }
     }
     const ii = db.prepare('INSERT INTO insights (repo_id, category, kind, title, body_md, severity, refs, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     insights.forEach((i, n) => ii.run(repoId, i.category, i.kind, i.title, i.bodyMd, i.severity ?? null, JSON.stringify(i.refs), n));

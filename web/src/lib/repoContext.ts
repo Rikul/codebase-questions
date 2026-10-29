@@ -4,7 +4,14 @@ import type { Category, RepoSummary } from '@cq/shared';
 export interface AskIntent {
   question?: string;
   category?: Category;
-  focus?: { componentId?: string; connectionId?: string; path?: string; label: string };
+  focus?: {
+    componentId?: string;
+    connectionId?: string;
+    path?: string;
+    symbol?: { name?: string; line?: number };
+    snippet?: { text: string; startLine?: number; endLine?: number };
+    label: string;
+  };
   autoSend?: boolean;
 }
 
@@ -12,7 +19,8 @@ export interface RepoCtx {
   repo: RepoSummary;
   openCode: (path: string, startLine?: number, endLine?: number) => void;
   askAbout: (intent: AskIntent) => void;
-  openFile: (path: string) => void;
+  /** Open the Files tab on a file, optionally explaining a symbol in it. */
+  openFile: (path: string, symbol?: { name?: string; line?: number }) => void;
 }
 
 export const RepoContext = createContext<RepoCtx | null>(null);

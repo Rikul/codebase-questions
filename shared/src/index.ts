@@ -40,6 +40,10 @@ export const CodeRefSchema = z.object({
 });
 export type CodeRef = z.infer<typeof CodeRefSchema>;
 
+export const LAYERS = ['entry', 'interface', 'core', 'data', 'infra', 'external'] as const;
+export const LayerSchema = z.enum(LAYERS);
+export type Layer = z.infer<typeof LayerSchema>;
+
 export const ComponentSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -47,6 +51,13 @@ export const ComponentSchema = z.object({
   description: z.string(),
   responsibilities: z.array(z.string()).default([]),
   paths: z.array(z.string()).default([]),
+  // Richer, LLM-derived fields (optional so older exports still load).
+  layer: LayerSchema.optional(),
+  group: z.string().optional(),
+  parentId: z.string().optional(),
+  keyFiles: z.array(z.string()).optional(),
+  entryPoints: z.array(z.string()).optional(),
+  techStack: z.array(z.string()).optional(),
 });
 export type Component = z.infer<typeof ComponentSchema>;
 
@@ -58,6 +69,11 @@ export const ConnectionSchema = z.object({
   label: z.string(),
   description: z.string(),
   evidence: z.array(CodeRefSchema).default([]),
+  sync: z.enum(['sync', 'async']).optional(),
+  protocol: z.string().optional(),
+  dataExchanged: z.string().optional(),
+  direction: z.enum(['request', 'response', 'bidirectional']).optional(),
+  confidence: z.enum(['verified', 'inferred']).optional(),
 });
 export type Connection = z.infer<typeof ConnectionSchema>;
 
@@ -140,20 +156,137 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export interface AskFocus {
+  componentId?: string;
+  connectionId?: string;
+  path?: string;
+  symbol?: { name?: string; line?: number };
+  snippet?: { text: string; startLine?: number; endLine?: number };
+}
+
 export interface AskRequest {
   question: string;
   category?: Category;
   conversationId?: number;
-  focus?: { componentId?: string; connectionId?: string; path?: string };
+  focus?: AskFocus;
 }
+
+/** One investigation step the agent took (shown as a live trace in the UI). */
+export interface AgentStep {
+  id: string;
+  label: string;
+  tool: string;
+  status: 'running' | 'done' | 'error';
+  summary?: string;
+}
+
+/** Events shared by every agent-backed SSE stream. */
+export type AgentStreamEvent =
+  | { type: 'step'; step: AgentStep }
+  | { type: 'token'; text: string }
+  | { type: 'reset'; text: string }
+  | { type: 'error'; message: string };
 
 /** Streaming events sent by POST /api/repos/:id/ask (SSE). */
 export type AskEvent =
   | { type: 'meta'; conversationId: number; category: Category }
   | { type: 'sources'; citations: Citation[] }
   | { type: 'token'; text: string }
+  | { type: 'step'; step: AgentStep }
+  | { type: 'reset'; text: string }
   | { type: 'done'; messageId: number; citations: Citation[] }
   | { type: 'error'; message: string };
+
+// ---------- Explanations ----------
+
+const LinkSchema = z.object({
+  path: z.string(),
+  line: z.number().int().optional(),
+  symbol: z.string().optional().describe('enclosing function/class at that location'),
+  why: z.string().describe('one sentence: what happens there and why'),
+});
+
+export const ExplanationSchema = z.object({
+  what: z.string().describe('What it is and its single main responsibility (markdown, 2-4 sentences, cite [path:start-end])'),
+  howItFits: z.string().describe('How it fits with the rest of the project: component, layer, who depends on it and what it depends on (markdown)'),
+  whenUsed: z.string().describe('When it is used at runtime: startup, per HTTP request (which routes), from a job, in tests, build time... Trace the chain (markdown)'),
+  contains: z
+    .array(z.object({ name: z.string(), kind: z.string(), line: z.number().int().optional(), description: z.string() }))
+    .describe('Important functions/classes/variables it contains (for a symbol: its key parameters, fields, or inner steps)'),
+  callers: z.array(LinkSchema).describe('Who calls/uses it, verified with find_references'),
+  callees: z.array(LinkSchema.extend({ path: z.string().describe('file path, or package name for external libraries') })).describe('What it calls/depends on'),
+  signature: z.string().optional().describe('For symbols: the signature'),
+  examples: z.array(z.object({ path: z.string(), line: z.number().int().optional(), note: z.string() })).optional().describe('Representative usage examples'),
+  gotchas: z.array(z.string()).optional().describe('Pitfalls, side effects, error handling or security notes worth knowing'),
+});
+export type Explanation = z.infer<typeof ExplanationSchema>;
+
+export interface ExplainRequest {
+  path: string;
+  symbol?: { name?: string; line?: number };
+  snippet?: { text: string; startLine?: number; endLine?: number };
+  refresh?: boolean;
+}
+
+export interface ExplainTarget {
+  kind: 'file' | 'symbol' | 'snippet';
+  path: string;
+  name?: string;
+  symbolKind?: string;
+  line?: number;
+  endLine?: number;
+}
+
+export type ExplainEvent =
+  | AgentStreamEvent
+  | { type: 'target'; target: ExplainTarget }
+  | { type: 'result'; explanation: Explanation; cached: boolean; createdAt: string };
+
+// ---------- Flows (sequence diagrams) ----------
+
+export const FlowSchema = z.object({
+  id: z.string(),
+  title: z.string().describe('e.g. "Handle GET /users/:id"'),
+  trigger: z.string().describe('What starts it: an HTTP route, CLI command, job, startup, user action'),
+  summary: z.string().describe('2-3 sentence markdown summary'),
+  participants: z
+    .array(z.object({ id: z.string(), label: z.string(), componentId: z.string().optional().describe('architecture component id, if any') }))
+    .describe('Ordered left-to-right lifelines: caller first'),
+  steps: z
+    .array(
+      z.object({
+        from: z.string().describe('participant id'),
+        to: z.string().describe('participant id'),
+        label: z.string().describe('function call or message, e.g. "getUser(id)" or "SELECT users"'),
+        kind: z.enum(['call', 'return', 'async', 'db', 'http', 'event']),
+        ref: CodeRefSchema.optional().describe('where this step happens in code'),
+        note: z.string().optional(),
+      }),
+    )
+    .describe('Messages in time order'),
+});
+export type Flow = z.infer<typeof FlowSchema>;
+
+export type FlowEvent = AgentStreamEvent | { type: 'result'; flow: Flow };
+
+// ---------- "Ask the diagram" ----------
+
+export const DiagramAnswerSchema = z.object({
+  answerMd: z.string().describe('Concise markdown answer with [path:start-end] citations'),
+  highlight: z.object({ componentIds: z.array(z.string()), connectionIds: z.array(z.string()) }),
+  tour: z
+    .array(
+      z.object({
+        componentId: z.string().optional(),
+        connectionId: z.string().optional(),
+        caption: z.string().describe('One or two sentences for this stop'),
+        ref: CodeRefSchema.optional(),
+      }),
+    )
+    .describe('Ordered walkthrough of the answer across the diagram'),
+});
+export type DiagramAnswer = z.infer<typeof DiagramAnswerSchema>;
+export type DiagramEvent = AgentStreamEvent | { type: 'result'; answer: DiagramAnswer; cached: boolean };
 
 // ---------- Export format ----------
 
@@ -193,6 +326,14 @@ export const ExportSchema = z.object({
   ),
   chunks: z
     .array(z.object({ path: z.string(), startLine: z.number(), endLine: z.number(), content: z.string() }))
+    .optional(),
+  flows: z.array(FlowSchema).optional(),
+  explanations: z.array(z.object({ key: z.string(), fileHash: z.string(), content: z.string(), createdAt: z.string() })).optional(),
+  refs: z
+    .array(z.object({ name: z.string(), path: z.string(), line: z.number(), kind: z.string(), fromSymbol: z.string().nullable(), targetPath: z.string().nullable(), targetLine: z.number().nullable(), confidence: z.string() }))
+    .optional(),
+  symbols: z
+    .array(z.object({ path: z.string(), name: z.string(), kind: z.string(), line: z.number(), endLine: z.number(), exported: z.boolean(), parent: z.string().nullable(), signature: z.string().nullable() }))
     .optional(),
 });
 export type ProjectExport = z.infer<typeof ExportSchema>;

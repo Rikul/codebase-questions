@@ -1,5 +1,7 @@
 import OpenAI from 'openai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import type { AgentOptions, AgentResult } from './agent.js';
+import { AgentSession, submitName, toolJsonSchema } from './agent.js';
 import type { CompleteOptions, EmbeddingProvider, JSONOptions, LLMProvider } from './provider.js';
 import { extractJSON, withRetry } from './provider.js';
 
@@ -83,6 +85,90 @@ export class OpenAIProvider implements LLMProvider {
       const t = chunk.choices[0]?.delta?.content;
       if (t) yield t;
     }
+  }
+
+  async runAgent<T>(opts: AgentOptions<T>): Promise<AgentResult<T>> {
+    const session = new AgentSession(opts);
+    const maxSteps = opts.maxSteps ?? 14;
+    const tools: OpenAI.Chat.ChatCompletionTool[] = opts.tools.map((t) => ({
+      type: 'function',
+      function: { name: t.name, description: t.description, parameters: toolJsonSchema(t.schema, 'openApi3') },
+    }));
+    const fin = opts.final;
+    if (fin) {
+      tools.push({
+        type: 'function',
+        function: {
+          name: submitName(fin),
+          description: fin.description ?? 'Submit your final, complete answer. Call this exactly once when you are done investigating.',
+          parameters: toolJsonSchema(fin.schema, 'openApi3'),
+        },
+      });
+    }
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = toMessages(opts);
+    let lastText = '';
+    let nudged = false;
+    for (let step = 0; step < maxSteps + 2; step++) {
+      const forceFinal = Boolean(fin) && (step >= maxSteps - 1 || session.budgetExceeded);
+      const noTools = !fin && (step >= maxSteps - 1 || session.budgetExceeded);
+      const stream = await withRetry(() =>
+        this.client.chat.completions.create({
+          model: this.pick(opts.fast),
+          messages,
+          tools,
+          tool_choice: forceFinal ? { type: 'function', function: { name: submitName(fin!) } } : noTools ? 'none' : 'auto',
+          max_completion_tokens: opts.maxTokens ?? 8192,
+          stream: true,
+        }),
+      );
+      let turnText = '';
+      const acc: { id: string; name: string; args: string }[] = [];
+      for await (const chunk of stream) {
+        const d = chunk.choices[0]?.delta;
+        if (!d) continue;
+        if (d.content) {
+          turnText += d.content;
+          opts.onEvent?.({ type: 'text', text: d.content });
+        }
+        for (const tc of d.tool_calls ?? []) {
+          const a = (acc[tc.index] ??= { id: '', name: '', args: '' });
+          if (tc.id) a.id = tc.id;
+          if (tc.function?.name) a.name += tc.function.name;
+          if (tc.function?.arguments) a.args += tc.function.arguments;
+        }
+      }
+      const calls = acc.filter(Boolean);
+      messages.push({
+        role: 'assistant',
+        content: turnText || null,
+        ...(calls.length ? { tool_calls: calls.map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.args || '{}' } })) } : {}),
+      });
+      if (!calls.length) {
+        lastText = turnText;
+        if (fin && !session.final && !nudged) {
+          nudged = true;
+          messages.push({ role: 'user', content: `Now call ${submitName(fin)} with your final answer.` });
+          continue;
+        }
+        break;
+      }
+      if (turnText) opts.onEvent?.({ type: 'reset', text: turnText });
+      const results = await Promise.all(
+        calls.map(async (c) => {
+          let input: unknown = {};
+          try {
+            input = JSON.parse(c.args || '{}');
+          } catch {
+            return { id: c.id, content: 'Error: arguments were not valid JSON' };
+          }
+          const r = await session.execute(c.name, input);
+          return { id: c.id, content: r.content };
+        }),
+      );
+      for (const r of results) messages.push({ role: 'tool', tool_call_id: r.id, content: r.content });
+      if (session.final !== undefined) break;
+    }
+    return { text: lastText, final: session.final, steps: messages.length, toolCalls: session.calls };
   }
 }
 

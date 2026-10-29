@@ -60,7 +60,7 @@ export interface RetrieveOptions {
 export async function retrieve(db: DB, repoId: string, question: string, opts: RetrieveOptions): Promise<RetrievedChunk[]> {
   const limit = opts.limit ?? 12;
   const rank = new Map<number, number>();
-  const addRanked = (ids: number[], weight: number) => ids.forEach((id, i) => rank.set(id, (rank.get(id) ?? 0) + weight / (60 + i)));
+  const addRanked = (ids: number[], weight: number) => ids.forEach((id, i) => rank.set(id, (rank.get(id) ?? 0) + weight / (10 + i)));
 
   // 1. Keyword search (FTS5 BM25, path column weighted higher).
   const terms = tokenize(question);
@@ -125,7 +125,7 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
     const params = focus.flatMap((p) => [p, `${p}/%`]);
     const rows = db.prepare(`SELECT id FROM chunks WHERE repo_id=? AND (${ph}) LIMIT 400`).all(repoId, ...params) as { id: number }[];
     const ids = new Set(rows.map((r) => r.id));
-    for (const id of ids) rank.set(id, (rank.get(id) ?? 0) + 0.008);
+    for (const id of ids) rank.set(id, (rank.get(id) ?? 0) + 0.05);
     if (!terms.length) addRanked([...ids].slice(0, 20), 0.5);
   }
 

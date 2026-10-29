@@ -5,6 +5,9 @@ import type { AgentTool } from '../llm/agent.js';
 import type { EmbeddingProvider } from '../llm/index.js';
 import { retrieve } from '../qa/retrieve.js';
 import { fileContent, getArchitecture } from '../routes/queries.js';
+import { fileHistory } from '../history/index.js';
+import { safeGitPath } from '../history/git.js';
+import { blame, commitDetails, searchHistory, symbolHistory } from '../history/symbol.js';
 
 const MAX_READ_LINES = 400;
 
@@ -319,6 +322,71 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
         const p = ix.requireFile(i.path);
         const chains = ix.importerChains(p);
         return chains.length ? chains.map((c) => c.join(' → ')) : `No import chain from an entry point reaches ${p} (it may be an entry point, a test, loaded dynamically, or unused).`;
+      },
+    },
+    {
+      name: 'file_history',
+      description: 'Git history of a file (follows renames): when and by whom it was created, last changed, authors, and the commit list with subjects.',
+      schema: z.object({ path: z.string() }),
+      label: (i) => `Reading history of ${i.path}`,
+      run: async (i) => {
+        const h = fileHistory(ix.db, ix.repoId, ix.requireFile(i.path));
+        if (!h.available) return h.reason;
+        const shown = h.commits.slice(0, 40);
+        return {
+          ...h,
+          totalCommits: h.commitCount,
+          shownCommits: shown.length,
+          note: shown.length < h.commitCount ? `Showing the ${shown.length} most recent of ${h.commitCount} commits; "created" is computed from all of them.` : undefined,
+          commits: shown.map((c) => ({ sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), author: c.author, status: c.status, path: c.path, subject: c.subject, added: c.added, deleted: c.deleted })),
+        };
+      },
+    },
+    {
+      name: 'symbol_history',
+      description: 'Git history of a function/class/method (tracks its line range over time) or of lines start_line..end_line. Returns the introducing commit, each change with a diff excerpt, and authors.',
+      schema: z.object({ path: z.string(), name: z.string().optional(), start_line: z.number().int().optional(), end_line: z.number().int().optional() }),
+      label: (i) => `Reading history of ${i.name ?? `${i.path}:${i.start_line}-${i.end_line ?? ''}`}`,
+      run: async (i) => {
+        const h = await symbolHistory(ix.db, ix.repoId, { path: i.path, name: i.name, start: i.start_line, end: i.end_line });
+        if (!h.available) return h.reason;
+        const shown = h.commits.slice(0, 25);
+        return {
+          ...h,
+          shownCommits: shown.length,
+          note: shown.length < h.totalCommits ? `Showing the ${shown.length} most recent of ${h.totalCommits} changes; "introduced" is computed from all of them.` : undefined,
+          commits: shown.map((c) => ({ ...c, sha: c.sha.slice(0, 10), date: c.date.slice(0, 10), excerpt: c.excerpt.slice(0, 1200) })),
+        };
+      },
+    },
+    {
+      name: 'blame',
+      description: 'Who last changed each line of a range, and in which commit (git blame).',
+      schema: z.object({ path: z.string(), start_line: z.number().int(), end_line: z.number().int() }),
+      label: (i) => `Blaming ${i.path}:${i.start_line}-${i.end_line}`,
+      run: async (i) => {
+        const b = await blame(ix.db, ix.repoId, i.path, i.start_line, i.end_line);
+        return b.available ? b.ranges.map((r) => ({ lines: `${r.start}-${r.end}`, sha: r.sha.slice(0, 10), author: r.author, date: r.date.slice(0, 10), summary: r.summary })) : b.reason;
+      },
+    },
+    {
+      name: 'commit_details',
+      description: 'A commit: message, author, date, changed files, and its diff (optionally only for one path). Use to understand WHY something changed.',
+      schema: z.object({ sha: z.string(), path: z.string().optional() }),
+      label: (i) => `Reading commit ${String(i.sha).slice(0, 8)}`,
+      run: async (i) => {
+        const c = await commitDetails(ix.db, ix.repoId, i.sha, i.path ? safeGitPath(i.path) : undefined); // may be an old name
+        return c.available ? { ...c, patch: c.patch.slice(0, 12_000) } : c.reason;
+      },
+    },
+    {
+      name: 'search_history',
+      description: 'Find commits that added/removed a term in code (pickaxe) or mention it in their message. Good for "when was X added/removed?".',
+      schema: z.object({ term: z.string(), path: z.string().optional() }),
+      label: (i) => `Searching history for “${i.term}”`,
+      run: async (i) => {
+        const r = await searchHistory(ix.db, ix.repoId, i.term, i.path ? safeGitPath(i.path) : undefined);
+        return r.available ? r : r.reason;
       },
     },
     {

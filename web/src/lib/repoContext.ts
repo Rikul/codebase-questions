@@ -21,6 +21,8 @@ export interface RepoCtx {
   askAbout: (intent: AskIntent) => void;
   /** Open the Files tab on a file, optionally explaining a symbol in it. */
   openFile: (path: string, symbol?: { name?: string; line?: number }) => void;
+  /** Open the commit viewer (optionally focused on one file's diff). */
+  openCommit: (sha: string, path?: string) => void;
 }
 
 export const RepoContext = createContext<RepoCtx | null>(null);

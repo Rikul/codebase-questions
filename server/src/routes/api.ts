@@ -18,6 +18,9 @@ import { fileContent, fileTree, getArchitecture, snippet } from './queries.js';
 import { clickableIdentifiers, explain } from '../agent/explain.js';
 import { answerOnDiagram } from '../agent/diagram.js';
 import { listFlows, saveFlows, traceFlow } from '../analyze/flows.js';
+import { RepoIndex } from '../agent/tools.js';
+import { fileHistory, repoHistorySummary } from '../history/index.js';
+import { blame, commitDetails, symbolHistory } from '../history/symbol.js';
 
 const AskSchema = z.object({
   question: z.string().min(1).max(4000),
@@ -178,7 +181,8 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const arch = getArchitecture(db, req.params.id);
     const c = arch.components.find((x) => x.id === req.params.cid);
     if (!c) return void res.status(404).json({ error: 'Component not found' });
-    const files = (db.prepare(`SELECT path, lang, lines, summary FROM files WHERE repo_id=? AND json_extract(meta, '$.component') = ? ORDER BY path`).all(req.params.id, c.id) as any[]).slice(0, 300);
+    const files = (db.prepare(`SELECT path, lang, lines, summary, json_extract(meta, '$.history') AS history FROM files WHERE repo_id=? AND json_extract(meta, '$.component') = ? ORDER BY path`).all(req.params.id, c.id) as any[]).slice(0, 300);
+    for (const f of files) f.history = f.history ? JSON.parse(f.history) : null;
     const incoming = arch.connections.filter((e) => e.to === c.id);
     const outgoing = arch.connections.filter((e) => e.from === c.id);
     res.json({ component: c, files, incoming, outgoing });
@@ -329,6 +333,23 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
     await streamTask(res, (emit) => answerOnDiagram(db, llm, embeddings, row.id, parsed.data.question, Boolean(parsed.data.refresh), emit));
   });
+
+  // ---------- git history ----------
+  const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  const qn = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : undefined);
+  const guard = (fn: (req: Request, res: Response) => Promise<unknown> | unknown) => async (req: Request, res: Response) => {
+    if (!getRepo(req, res)) return;
+    try {
+      res.json(await fn(req, res));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  };
+  r.get('/repos/:id/history/file', guard((req) => fileHistory(db, req.params.id as string, new RepoIndex(db, req.params.id as string).requireFile(String(req.query.path ?? '')))));
+  r.get('/repos/:id/history/symbol', guard((req) => symbolHistory(db, req.params.id as string, { path: String(req.query.path ?? ''), name: qs(req.query.name), line: qn(req.query.line), start: qn(req.query.start), end: qn(req.query.end) })));
+  r.get('/repos/:id/history/summary', guard((req) => repoHistorySummary(db, req.params.id as string) ?? { available: false, reason: 'No git history' }));
+  r.get('/repos/:id/blame', guard((req) => blame(db, req.params.id as string, String(req.query.path ?? ''), qn(req.query.start), qn(req.query.end))));
+  r.get('/repos/:id/commits/:sha', guard((req) => commitDetails(db, req.params.id as string, req.params.sha as string, qs(req.query.path))));
 
   r.get('/repos/:id/export', (req, res) => {
     const row = getRepo(req, res);

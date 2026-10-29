@@ -67,6 +67,7 @@ function categoryFacts(ctx: RepoContext, cat: Category, arch: Architecture): str
       env.size ? `# Environment variables read\n${[...env].map(([k, v]) => `${k} (${v})`).join('\n')}` : '',
       infraFiles ? `# Build / deploy files\n${infraFiles}` : '',
       `# Key files\n${keyFiles}`,
+      historyBlock(ctx),
     );
   }
   if (cat === 'security') {
@@ -112,6 +113,17 @@ function categoryFacts(ctx: RepoContext, cat: Category, arch: Architecture): str
     );
   }
   return base.filter(Boolean).join('\n\n');
+}
+
+function historyBlock(ctx: RepoContext): string {
+  const h = ctx.history;
+  if (!h) return '';
+  return [
+    `# Git history (${h.commitCount} of ${h.totalCommits} commits indexed${h.shallow ? ', shallow clone: older history not fetched' : ''}; ${h.firstCommit?.slice(0, 10)} → ${h.lastCommit?.slice(0, 10)})`,
+    `Top authors: ${h.authors.map((a: any) => `${a.author} (${a.n})`).join(', ')}`,
+    `Most-changed files: ${h.hotspots.map((x: any) => `${x.path} (${x.n} commits)`).join(', ')}`,
+    `Recent commits:\n${h.recent.map((c) => `- ${c.sha.slice(0, 8)} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}`).join('\n')}`,
+  ].join('\n');
 }
 
 function numbered(s: string): string {
@@ -199,6 +211,20 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
       bodyMd: reading.map((p, i) => `${i + 1}. \`${p}\` — ${truncate(ctx.summaries.get(p) ?? '', 180)}`).join('\n'),
       refs: reading.map((p) => ref(p)),
     });
+    if (ctx.history) {
+      const h = ctx.history;
+      out.push({
+        kind: 'history',
+        title: 'Project history & hotspots',
+        bodyMd: [
+          `${h.capped ? `The most recent ${h.commitCount} of ${h.totalCommits} commits` : `${h.commitCount} commits`}${h.shallow ? ' (shallow clone: older history was not fetched)' : ''} from ${h.firstCommit?.slice(0, 10)} to ${h.lastCommit?.slice(0, 10)}.`,
+          `\n\n**Top contributors:** ${h.authors.slice(0, 5).map((a: any) => `${a.author} (${a.n})`).join(', ')}.`,
+          `\n\n**Most frequently changed files** (often the core or the riskiest code):\n\n${h.hotspots.slice(0, 8).map((x: any) => `- \`${x.path}\` — ${x.n} commits`).join('\n')}`,
+          `\n\n**Recent changes:**\n\n${h.recent.slice(0, 6).map((c) => `- \`${c.sha.slice(0, 7)}\` ${c.date.slice(0, 10)} · ${c.author}: ${c.subject}`).join('\n')}`,
+        ].join(''),
+        refs: h.hotspots.slice(0, 8).map((x: any) => ref(x.path)),
+      });
+    }
     const tests = ctx.files.filter((f) => ctx.facts.get(f.path)?.isTest);
     out.push({
       kind: 'testing',

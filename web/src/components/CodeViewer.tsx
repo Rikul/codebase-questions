@@ -16,6 +16,23 @@ interface Props {
   onIdentifierClick?: (name: string, line: number) => void;
   onExplainSelection?: (sel: { text: string; startLine: number; endLine: number }) => void;
   activeLine?: number | null;
+  /** Blame ranges for a gutter column (line numbers refer to `firstLine`-based lines). */
+  blame?: { start: number; end: number; sha: string; author: string; date: string; summary: string }[] | null;
+  onBlameClick?: (sha: string) => void;
+  /** Color +/- lines of a unified diff. */
+  diff?: boolean;
+}
+
+function initials(name: string) {
+  return name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join('');
+}
+
+function age(date: string) {
+  const days = (Date.now() - new Date(date).getTime()) / 86_400_000;
+  if (days < 1) return 'today';
+  if (days < 60) return `${Math.round(days)}d`;
+  if (days < 730) return `${Math.round(days / 30)}mo`;
+  return `${Math.round(days / 365)}y`;
 }
 
 const IDENT_RE = /[A-Za-z_$][\w$]*/g;
@@ -55,7 +72,15 @@ function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highlightEnd, full, title, actions, identifiers, onIdentifierClick, onExplainSelection, activeLine }: Props) {
+export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highlightEnd, full, title, actions, identifiers, onIdentifierClick, onExplainSelection, activeLine, blame, onBlameClick, diff }: Props) {
+  const blameAt = useMemo(() => {
+    if (!blame?.length) return null;
+    const m = new Map<number, (typeof blame)[number]>();
+    for (const r of blame) m.set(r.start, r);
+    const times = blame.map((r) => new Date(r.date).getTime());
+    return { starts: m, min: Math.min(...times), max: Math.max(...times) };
+  }, [blame]);
+  const rawLines = useMemo(() => code.split('\n'), [code]);
   const [selection, setSelection] = useState<{ text: string; startLine: number; endLine: number; x: number; y: number } | null>(null);
   const plain = useMemo(() => code.split('\n').map(escapeHtml), [code]);
   const [lines, setLines] = useState<string[]>(plain);
@@ -151,7 +176,41 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
             {rendered.map((l, i) => {
               const n = firstLine + i;
               return (
-                <tr key={i} data-ln={n} className={[n >= hs && n <= he ? 'hl' : '', activeLine === n ? 'active' : ''].join(' ').trim() || undefined}>
+                <tr
+                  key={i}
+                  data-ln={n}
+                  className={
+                    [
+                      n >= hs && n <= he ? 'hl' : '',
+                      activeLine === n ? 'active' : '',
+                      diff ? (rawLines[i]?.startsWith('+') && !rawLines[i]?.startsWith('+++') ? 'add' : rawLines[i]?.startsWith('-') && !rawLines[i]?.startsWith('---') ? 'del' : rawLines[i]?.startsWith('@@') ? 'hunk' : '') : '',
+                    ]
+                      .join(' ')
+                      .trim() || undefined
+                  }
+                >
+                  {blameAt && (() => {
+                    const r = blameAt.starts.get(n);
+                    if (!r) return <td className="blame" />;
+                    const t = (new Date(r.date).getTime() - blameAt.min) / Math.max(1, blameAt.max - blameAt.min);
+                    return (
+                      <td className="blame start" style={{ ['--age' as string]: String(t) }}>
+                        <button
+                          type="button"
+                          className="blame-btn"
+                          title={`${r.sha.slice(0, 8)} · ${r.author} · ${r.date.slice(0, 10)}\n${r.summary}`}
+                          aria-label={`Open commit ${r.sha.slice(0, 7)} by ${r.author} on ${r.date.slice(0, 10)}: ${r.summary}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onBlameClick?.(r.sha);
+                          }}
+                        >
+                          <span className="who">{initials(r.author)}</span>
+                          <span className="when">{age(r.date)}</span>
+                        </button>
+                      </td>
+                    );
+                  })()}
                   <td className="ln">{n}</td>
                   <td dangerouslySetInnerHTML={{ __html: l || ' ' }} />
                 </tr>

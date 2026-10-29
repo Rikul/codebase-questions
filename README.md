@@ -21,6 +21,19 @@ The **Files** tab (and every code popup opened from a citation) has an explanati
 
 Click any underlined name in the code to explain that symbol. Select a few lines and choose **Explain selection** to explain just that code. Explanations are cached per file version and included in exports.
 
+### History: when was this created or changed?
+
+The app keeps a bounded git history (`HISTORY_DEPTH`, 1000 commits by default) and can answer history questions for any file, function, class, variable or selection:
+
+- **Files** show "Created 2023-12-21 by … · last changed … · N commits" in the header. The explanation panel has a timeline (follows renames, with +/− counts and authors).
+- **Functions and classes** are tracked through their current line range with `git log -L`, so you see the commit that **introduced** them and every later change with a diff excerpt. **Variables** are found with git's pickaxe (`-S`), which gives the commit where the name first appeared. **Selections** use blame plus line history.
+- **Blame** puts a gutter next to the code (author initials and age, tinted by recency). Click it to open the commit.
+- **Commit viewer** shows the message, changed files and a colored diff, with **Explain this change**.
+- **The model uses history tools too:** `file_history`, `symbol_history`, `blame`, `commit_details` and `search_history`. It explains *why* something changed by reading the key commits. Ask "when was login added?" or "who changed the auth flow?"; offline, these are answered straight from git.
+- Onboarding gets a **Project history & hotspots** section (most-changed files, top contributors, recent changes), and component panels show recently changed files and hotspots.
+
+If history is truncated (shallow clone), creation dates are shown as "on or before". Exports include file timelines; symbol history, blame and diffs need re-analysis after import, because `.git` isn't exported. The kept `.git` has its credentials and reflogs removed, and only read-only git commands are run on it.
+
 ### Better diagrams from LLM understanding
 
 - **Verified architecture.** The model drafts the component diagram, then *verifies* each connection by reading the code with its tools. It fixes wrong edges, adds missed ones (for example queue publish/consume pairs or service-to-service calls), and records the protocol, sync vs async, and the data exchanged. Verified edges are solid; unverified ones are dotted and marked "?".
@@ -96,15 +109,21 @@ All settings are environment variables. See [`.env.example`](.env.example).
 | `EMBEDDING_PROVIDER` | `openai` if an OpenAI key is set | Adds vector search on top of keyword (FTS5/BM25) search. |
 | `GITHUB_TOKEN` | — | Read access for private GitHub repos. It is never written to disk or logs. |
 | `MAX_LLM_FILES` | 150 | How many of the most central files get an LLM summary. The rest get static summaries. |
-| `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits |
+| `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits (working tree) |
+| `HISTORY_DEPTH` / `HISTORY_INDEX_COMMITS` / `MAX_HISTORY_MB` | 1000 / 5000 / 500 | Git history kept, commits indexed for timelines, and the size limit for the kept `.git`. Over the limit, history is dropped with a warning. Truncated history is labeled in the UI. |
 | `COOKIE_SECURE`, `TRUST_PROXY` | false | Set both when serving behind an HTTPS reverse proxy. |
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
 
 ## How it works
 
 ```
-clone (shallow, https only) → scan (.gitignore, skip binaries/vendored)
+clone (https only, bounded history) → scan (.gitignore, skip binaries/vendored)
   → parse (imports, symbols, routes, env vars, security + infra signals, manifests)
   → import graph → module grouping → chunk + FTS5 index (+ embeddings)
+  → git history index (commits, per-file changes, renames)
   → LLM: per-file summaries (batched, cached by content hash)
   → LLM: architecture synthesis (components + connections with code evidence)
   → LLM: per-category insights + suggested questions

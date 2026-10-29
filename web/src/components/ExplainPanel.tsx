@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AgentStep, Explanation, ExplainEvent, ExplainRequest, ExplainTarget } from '@cq/shared';
-import { streamPost } from '../lib/api';
+import { api, streamPost } from '../lib/api';
 import { timeAgo } from '../lib/format';
 import { useRepo } from '../lib/repoContext';
 import { AgentTrace, upsertStep } from './AgentTrace';
@@ -32,6 +32,94 @@ function Section({ title, count, children, defaultOpen = true }: { title: string
   );
 }
 
+interface HistCommit {
+  sha: string;
+  /** File path at that commit (differs from today's path before a rename). */
+  path?: string;
+  author: string;
+  date: string;
+  subject: string;
+  status?: string;
+  added?: number | null;
+  deleted?: number | null;
+}
+type HistoryData =
+  | { available: false; reason: string }
+  | {
+      available: true;
+      created?: (HistCommit & { uncertain: boolean }) | null;
+      introduced?: (HistCommit & { uncertain: boolean; how: string }) | null;
+      lastChanged: HistCommit | null;
+      commitCount?: number;
+      commits: HistCommit[];
+      authors: { name: string; commits: number }[];
+      renames?: { from: string; to: string }[];
+      truncated: boolean;
+    };
+
+function HistorySection({ data, narrative, onCommit }: { data: HistoryData | null; narrative?: { created: string; evolution: string; keyCommits: { sha: string; date?: string; why: string }[] }; onCommit: (sha: string, path?: string) => void }) {
+  const [all, setAll] = useState(false);
+  if (!data) return <div className="muted small"><span className="spinner" /> Loading history…</div>;
+  if (!data.available) return <div className="muted small">{data.reason}</div>;
+  const first = data.created ?? data.introduced ?? null;
+  const count = data.commitCount ?? data.commits.length;
+  const list = all ? data.commits : data.commits.slice(0, 8);
+  return (
+    <div className="history">
+      <div className="hist-facts">
+        {first && (
+          <button className="hist-fact" onClick={() => onCommit(first.sha, first.path)} title={first.subject}>
+            <span className="k">{data.introduced?.how === 'pickaxe' ? 'First appeared' : 'Created'}</span>
+            <span className="v">{first.uncertain ? '≤ ' : ''}{first.date.slice(0, 10)}</span>
+            <span className="s">{first.author} · <code className="plain">{first.sha.slice(0, 7)}</code></span>
+          </button>
+        )}
+        {data.lastChanged && (
+          <button className="hist-fact" onClick={() => onCommit(data.lastChanged!.sha, data.lastChanged!.path)} title={data.lastChanged.subject}>
+            <span className="k">Last changed</span>
+            <span className="v">{data.lastChanged.date.slice(0, 10)}</span>
+            <span className="s">{data.lastChanged.author} · {timeAgo(data.lastChanged.date)}</span>
+          </button>
+        )}
+        <div className="hist-fact static">
+          <span className="k">Commits</span>
+          <span className="v">{count}</span>
+          <span className="s">{data.authors.slice(0, 3).map((a) => a.name).join(', ')}{data.authors.length > 3 ? ` +${data.authors.length - 3}` : ''}</span>
+        </div>
+      </div>
+      {first?.uncertain && <div className="muted small">History is truncated (shallow clone), so this may be older. Set HISTORY_DEPTH=0 for full history.</div>}
+      {data.renames?.length ? <div className="muted small">Renamed: {data.renames.map((r) => `${r.from} → ${r.to}`).join(', ')}</div> : null}
+      {narrative && (
+        <>
+          <Markdown>{narrative.created}</Markdown>
+          <Markdown>{narrative.evolution}</Markdown>
+          {narrative.keyCommits.length > 0 && (
+            <div className="refs">
+              {narrative.keyCommits.slice(0, 6).map((k) => (
+                <button key={k.sha} className="cite" title={k.why} onClick={() => onCommit(k.sha, data.commits.find((c) => c.sha.startsWith(k.sha) || k.sha.startsWith(c.sha))?.path)}>{k.sha.slice(0, 7)}</button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+      <ol className="timeline">
+        {list.map((c) => (
+          <li key={c.sha}>
+            <button className="plain-btn" onClick={() => onCommit(c.sha, c.path)} title={c.path && data.commits[0]?.path && c.path !== data.commits[0].path ? `as ${c.path}` : undefined}>
+              <span className="mono small muted">{c.date.slice(0, 10)}</span>
+              <span className="grow tl-subject">{c.subject}</span>
+              {c.status && c.status !== 'M' && <span className={`chip st-${c.status}`}>{c.status === 'A' ? 'added' : c.status === 'R' ? 'renamed' : c.status === 'D' ? 'deleted' : c.status}</span>}
+              {(c.added != null || c.deleted != null) && <span className="small diffstat"><span className="plus">+{c.added ?? 0}</span> <span className="minus">−{c.deleted ?? 0}</span></span>}
+              <span className="small muted">{c.author}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+      {data.commits.length > 8 && <button className="btn sm ghost" onClick={() => setAll((a) => !a)}>{all ? 'Show fewer' : `Show all ${data.commits.length}`}</button>}
+    </div>
+  );
+}
+
 const isPkg = (p: string) => !p.includes('/') && !/\.\w{1,5}$/.test(p);
 
 export function ExplainPanel({
@@ -46,7 +134,8 @@ export function ExplainPanel({
   onClose?: () => void;
   title?: string;
 }) {
-  const { repo, openCode, askAbout } = useRepo();
+  const { repo, openCode, askAbout, openCommit } = useRepo();
+  const [history, setHistory] = useState<HistoryData | null>(null);
   const [target, setTarget] = useState<ExplainTarget | null>(null);
   const [steps, setSteps] = useState<AgentStep[]>([]);
   const [notes, setNotes] = useState<string[]>([]);
@@ -94,6 +183,24 @@ export function ExplainPanel({
     return () => abort.current?.abort();
   }, [run]);
 
+  // Git facts load independently of (and usually faster than) the model's explanation.
+  useEffect(() => {
+    if (!target) return;
+    setHistory(null);
+    const q = new URLSearchParams({ path: target.path });
+    let url = `/repos/${repo.id}/history/file`;
+    if (target.kind === 'symbol') {
+      url = `/repos/${repo.id}/history/symbol`;
+      if (target.name) q.set('name', target.name);
+      if (target.line) q.set('line', String(target.line));
+    } else if (target.kind === 'snippet' && target.line) {
+      url = `/repos/${repo.id}/history/symbol`;
+      q.set('start', String(target.line));
+      q.set('end', String(target.endLine ?? target.line));
+    }
+    api<HistoryData>(`${url}?${q}`).then(setHistory, (e) => setHistory({ available: false, reason: e.message }));
+  }, [repo.id, target?.kind, target?.path, target?.name, target?.line, target?.endLine]);
+
   const x = result?.explanation;
   const heading =
     title ??
@@ -124,6 +231,11 @@ export function ExplainPanel({
         )}
         <AgentTrace steps={steps} running={running} notes={notes} />
         {running && narration && <div className="muted small narration">{narration}</div>}
+        {!x && history?.available && (
+          <Section title="When was it created & how has it changed?" count={history.commitCount ?? history.commits.length}>
+            <HistorySection data={history} onCommit={(sha, p) => openCommit(sha, p ?? target?.path)} />
+          </Section>
+        )}
         {error && <div className="error-box">{error}</div>}
         {result && (
           <div className="muted small row">
@@ -139,6 +251,9 @@ export function ExplainPanel({
                 <Markdown>{x[q.key]}</Markdown>
               </Section>
             ))}
+            <Section title="When was it created & how has it changed?" count={history?.available ? history.commitCount ?? history.commits.length : undefined}>
+              <HistorySection data={history} narrative={x.history} onCommit={(sha, p) => openCommit(sha, p ?? target?.path)} />
+            </Section>
             <Section title="What does it contain?" count={x.contains.length}>
               {x.contains.length ? (
                 <div className="link-list">

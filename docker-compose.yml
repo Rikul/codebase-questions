@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    image: codebase-questions:latest
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - data:/data
+    restart: unless-stopped
+
+volumes:
+  data:

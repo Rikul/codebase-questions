@@ -109,7 +109,8 @@ All settings are environment variables. See [`.env.example`](.env.example).
 | `EMBEDDING_PROVIDER` | `openai` if an OpenAI key is set | Adds vector search on top of keyword (FTS5/BM25) search. |
 | `GITHUB_TOKEN` | — | Read access for private GitHub repos. It is never written to disk or logs. |
 | `MAX_LLM_FILES` | 150 | How many of the most central files get an LLM summary. The rest get static summaries. |
-| `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits |
+| `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits (working tree) |
+| `HISTORY_DEPTH` / `HISTORY_INDEX_COMMITS` / `MAX_HISTORY_MB` | 1000 / 5000 / 500 | Git history kept, commits indexed for timelines, and the size limit for the kept `.git`. Over the limit, history is dropped with a warning. Truncated history is labeled in the UI. |
 | `COOKIE_SECURE`, `TRUST_PROXY` | false | Set both when serving behind an HTTPS reverse proxy. |
 
 ## License

@@ -362,7 +362,7 @@ export async function analyzeInsights(
               ctx.llm,
               {
                 name: `insights_${cat}`,
-                maxTokens: 12_000,
+                maxTokens: 16_384,
                 system: `You are an expert engineer producing the "${CATEGORY_LABELS[cat]}" section of a codebase knowledge base. ${GUIDES[cat]} Ground every statement in the provided facts and cite files as refs (path plus line numbers when known). Be concrete and concise; prefer bullet lists and tables.`,
                 messages: [{ role: 'user', content: categoryFacts(ctx, cat, arch) }],
                 schema: InsightsOut,

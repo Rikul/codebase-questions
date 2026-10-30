@@ -160,7 +160,7 @@ export async function analyzeFlows(llm: LLMProvider, ix: RepoIndex, warn: (m: st
       ],
       tools: repoTools(ix),
       maxSteps: 16,
-      maxTokens: 12_000,
+      maxTokens: 16_384,
       final: { name: 'flows', schema: FlowsOut },
       scripted: async () => ({ final: { flows: heuristicFlows(ix, arch) } }),
     },

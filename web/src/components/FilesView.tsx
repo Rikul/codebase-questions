@@ -9,7 +9,7 @@ function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: Fil
   const name = node.path.split('/').pop() || '/';
   if (node.type === 'file') {
     return (
-      <div className={`tree-row ${selected === node.path ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onSelect(node.path)} title={node.summary ?? node.path}>
+      <div className={`tree-row ${selected === node.path ? 'active' : ''}`} data-path={node.path} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => onSelect(node.path)} title={node.summary ?? node.path}>
         <span className="caret" />
         {name}
       </div>
@@ -19,7 +19,7 @@ function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: Fil
   return (
     <>
       {depth >= 0 && (
-        <div className="tree-row" style={{ paddingLeft: 8 + depth * 14 }} onClick={() => toggle(node.path)}>
+        <div className={`tree-row ${selected === node.path ? 'active' : ''}`} data-path={node.path} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => toggle(node.path)}>
           <span className="caret">{isOpen ? '▾' : '▸'}</span>
           <b style={{ fontWeight: 550 }}>{name}</b>
         </div>
@@ -29,7 +29,25 @@ function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: Fil
   );
 }
 
-/** A file to show, optionally explaining a symbol or highlighting a line range. A new object re-applies it. */
+function findNode(node: FileNode, p: string): FileNode | null {
+  if (node.path === p || (!p && node.type === 'dir')) return node;
+  for (const c of node.children ?? []) {
+    if (c.path === p || p.startsWith(c.path + '/')) {
+      const hit = findNode(c, p);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** Paths of a path's ancestor directories, plus the path itself when includeSelf. */
+function ancestors(p: string, includeSelf = false): string[] {
+  const parts = p.split('/');
+  const n = includeSelf ? parts.length : parts.length - 1;
+  return parts.slice(0, n).map((_, i) => parts.slice(0, i + 1).join('/'));
+}
+
+/** A file (or directory) to show, optionally explaining a symbol or highlighting a line range. A new object re-applies it. */
 export interface FileTarget {
   path: string;
   symbol?: { name?: string; line?: number };
@@ -40,12 +58,14 @@ export interface FileTarget {
 export function FilesView({ target }: { target: FileTarget | null }) {
   const { repo, openCode } = useRepo();
   const [tree, setTree] = useState<FileNode | null>(null);
-  const [path, setPath] = useState<string | null>(target?.path ?? null);
+  const [path, setPath] = useState<string | null>(null);
+  /** Directory being shown (links can point at folders); exclusive with `path`. */
+  const [dir, setDir] = useState<string | null>(null);
   const [range, setRange] = useState<{ path: string; start: number; end: number } | null>(null);
   const [file, setFile] = useState<any>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [idents, setIdents] = useState<Set<string>>(new Set());
-  const [subject, setSubject] = useState<ExplainSubject | null>(target ? { path: target.path, symbol: target.symbol } : null);
+  const [subject, setSubject] = useState<ExplainSubject | null>(null);
   const [showExplain, setShowExplain] = useState(true);
   const [blameOn, setBlameOn] = useState(false);
   const [blameData, setBlameData] = useState<any[] | null>(null);
@@ -73,19 +93,36 @@ export function FilesView({ target }: { target: FileTarget | null }) {
       setOpen((o) => (o.size ? o : new Set(t.children?.filter((c) => c.type === 'dir').slice(0, 1).map((c) => c.path))));
     });
   }, [repo.id]);
+  // Apply a link target once the tree is loaded, so we can tell files from directories.
   useEffect(() => {
-    if (!target) return;
-    setPath(target.path);
+    if (!target || !tree) return;
+    const p = target.path.replace(/^\.?\//, '').replace(/\/+$/, '');
+    if (findNode(tree, p)?.type === 'dir') {
+      setDir(p);
+      setPath(null);
+      setSubject(null);
+      setRange(null);
+      setOpen((o) => new Set([...o, ...ancestors(p, true)]));
+      return;
+    }
+    setDir(null);
+    setPath(p);
     // Keep the current explanation when a plain link points into the file it already explains.
-    setSubject((s) => (target.symbol || s?.path !== target.path ? { path: target.path, symbol: target.symbol } : s));
+    setSubject((s) => (target.symbol || s?.path !== p ? { path: p, symbol: target.symbol } : s));
     setShowExplain(true);
-    setRange(target.startLine ? { path: target.path, start: target.startLine, end: target.endLine ?? target.startLine } : null);
-  }, [target]);
+    setRange(target.startLine ? { path: p, start: target.startLine, end: target.endLine ?? target.startLine } : null);
+  }, [target, tree]);
+  // Bring the linked file or folder into view in the tree.
+  useEffect(() => {
+    const sel = path ?? dir;
+    if (sel == null) return;
+    const t = window.setTimeout(() => document.querySelector(`.tree [data-path="${CSS.escape(sel)}"]`)?.scrollIntoView({ block: 'nearest' }), 0);
+    return () => window.clearTimeout(t);
+  }, [path, dir, tree]);
   useEffect(() => {
     if (!path) return;
     setFile(null);
-    const parts = path.split('/');
-    setOpen((o) => new Set([...o, ...parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))]));
+    setOpen((o) => new Set([...o, ...ancestors(path)]));
     let active = true;
     api<any>(`/repos/${repo.id}/files?path=${encodeURIComponent(path)}`).then(
       (f) => active && setFile(f),
@@ -101,6 +138,7 @@ export function FilesView({ target }: { target: FileTarget | null }) {
   }, [repo.id, path]);
 
   const selectFile = (p: string) => {
+    setDir(null);
     setPath(p);
     setSubject({ path: p });
   };
@@ -108,18 +146,36 @@ export function FilesView({ target }: { target: FileTarget | null }) {
   const onSubject = (s: ExplainSubject) => {
     setSubject(s);
     setShowExplain(true);
-    if (s.path !== path) setPath(s.path);
+    if (s.path !== path) {
+      setDir(null);
+      setPath(s.path);
+    }
   };
   const toggle = (p: string) => setOpen((o) => { const n = new Set(o); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const signals = useMemo(() => ((file?.meta?.security ?? []) as { kind: string; line: number }[]).filter((s) => s.kind !== 'auth'), [file]);
+  const dirNode = dir != null && tree ? findNode(tree, dir) : null;
   const hl = range && range.path === path ? range : null;
   const activeLine = subject?.path === path ? subject?.symbol?.line ?? subject?.snippet?.startLine ?? null : null;
 
   return (
     <div className="files">
-      <div className="tree">{tree ? <TreeNode node={tree} depth={-1} selected={path} onSelect={selectFile} open={open} toggle={toggle} /> : <span className="spinner" />}</div>
+      <div className="tree">{tree ? <TreeNode node={tree} depth={-1} selected={path ?? dir} onSelect={selectFile} open={open} toggle={toggle} /> : <span className="spinner" />}</div>
       <div className="file-view">
-        {!path && <div className="empty">Pick a file. You'll get an explanation of what it is, where it fits, when it runs, and who calls it.</div>}
+        {dirNode && (
+          <div className="file-meta">
+            <h3 style={{ fontFamily: 'var(--mono)', fontSize: 15, wordBreak: 'break-all' }}>{dirNode.path || repo.name}/</h3>
+            <div className="small muted">{dirNode.children?.length ?? 0} item{dirNode.children?.length === 1 ? '' : 's'}. Pick a file to explain it.</div>
+            <div style={{ marginTop: 10 }}>
+              {(dirNode.children ?? []).map((c) => (
+                <button key={c.path} className="link-row" onClick={() => (c.type === 'dir' ? openCode(c.path) : selectFile(c.path))}>
+                  <span className="mono small">{c.path.split('/').pop()}{c.type === 'dir' ? '/' : ''}</span>
+                  {c.summary && <span className="muted small"> — {c.summary}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!path && !dirNode && <div className="empty">Pick a file. You'll get an explanation of what it is, where it fits, when it runs, and who calls it.</div>}
         {path && !file && <div className="empty"><span className="spinner" /></div>}
         {file?.error && <div className="error-box">Could not load {path}</div>}
         {file && !file.error && (

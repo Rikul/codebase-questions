@@ -18,7 +18,7 @@ export interface CompleteOptions {
 }
 
 export interface JSONOptions<T> extends CompleteOptions {
-  schema: z.ZodType<T>;
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>;
   /** Name for the structured output (used as tool / schema name). */
   name: string;
   description?: string;
@@ -60,10 +60,18 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<
   throw lastErr;
 }
 
-/** Extract a JSON object from model text (handles ```json fences and leading prose). */
+/**
+ * Extract a JSON object from model text (handles ```json fences and leading prose).
+ * Plain JSON is parsed as-is first: its string values often contain markdown code fences,
+ * which must not be mistaken for a fence wrapping the JSON.
+ */
 export function extractJSON(text: string): unknown {
-  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fence ? fence[1] : text;
+  const body = text.trim();
+  try {
+    return JSON.parse(body);
+  } catch {
+    // Fall through: take the outermost object/array, skipping any prose or fence around it.
+  }
   const start = body.search(/[{[]/);
   if (start < 0) throw new Error('No JSON found in model output');
   const open = body[start];

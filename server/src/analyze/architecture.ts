@@ -2,13 +2,12 @@ import { z } from 'zod';
 import type { Architecture, Component, ComponentType, Connection, ConnectionKind } from '@cq/shared';
 import { COMPONENT_TYPES, CONNECTION_KINDS, LAYERS } from '@cq/shared';
 import type { Layer } from '@cq/shared';
-import { repoTools } from '../agent/tools.js';
-import { AGENT_GUIDANCE } from '../llm/agent.js';
-import { agentWithFallback } from '../llm/index.js';
 import { jsonWithFallback } from '../llm/index.js';
 import type { RepoContext } from './context.js';
 import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, readmeIntro, slug, truncate } from './context.js';
 
+// Unknown enum values from the model are coerced (to 'other' or dropped) rather than
+// rejecting the whole architecture, which would discard an otherwise good answer.
 const LlmArchSchema = z.object({
   overview: z.string().describe('Markdown overview (3-6 paragraphs) of the system architecture, main flows and design choices.'),
   components: z
@@ -16,11 +15,11 @@ const LlmArchSchema = z.object({
       z.object({
         id: z.string().describe('short kebab-case id'),
         name: z.string(),
-        type: z.enum(COMPONENT_TYPES),
+        type: z.enum(COMPONENT_TYPES).catch('other'),
         description: z.string().describe('2-3 sentences'),
         responsibilities: z.array(z.string()).describe('3-6 bullet points'),
         paths: z.array(z.string()).describe('directory prefixes or file paths that belong to this component; empty for external systems'),
-        layer: z.enum(LAYERS).optional().describe('entry (routes/CLI/main), interface (UI/API surface), core (domain logic), data (persistence/models), infra (config/build/deploy), external (third-party systems)'),
+        layer: z.enum(LAYERS).optional().catch(undefined).describe('entry (routes/CLI/main), interface (UI/API surface), core (domain logic), data (persistence/models), infra (config/build/deploy), external (third-party systems)'),
         group: z.string().optional().describe('deployable unit or package this belongs to (e.g. "api-server", "web-client"); omit for single-package repos'),
         keyFiles: z.array(z.string()).optional().describe('2-5 most important files'),
         entryPoints: z.array(z.string()).optional(),
@@ -32,17 +31,17 @@ const LlmArchSchema = z.object({
     z.object({
       from: z.string().describe('component id'),
       to: z.string().describe('component id'),
-      kind: z.enum(CONNECTION_KINDS),
+      kind: z.enum(CONNECTION_KINDS).catch('other'),
       label: z.string().describe('2-5 word edge label, e.g. "REST calls", "reads/writes users"'),
       description: z.string().describe('How and why these components interact; name the functions/endpoints involved.'),
       evidence: z
         .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))
         .describe('1-4 code locations demonstrating the interaction, taken from the provided samples'),
-      sync: z.enum(['sync', 'async']).optional(),
+      sync: z.enum(['sync', 'async']).optional().catch(undefined),
       protocol: z.string().optional().describe('e.g. "in-process call", "REST/HTTP", "SQL", "Redis", "Kafka topic orders", "WebSocket"'),
       dataExchanged: z.string().optional().describe('what flows over this edge, e.g. "User records", "job payloads"'),
-      direction: z.enum(['request', 'response', 'bidirectional']).optional(),
-      confidence: z.enum(['verified', 'inferred']).optional().describe('verified = you read code that performs this interaction'),
+      direction: z.enum(['request', 'response', 'bidirectional']).optional().catch(undefined),
+      confidence: z.enum(['verified', 'inferred']).optional().catch(undefined).describe('verified = you read code that performs this interaction'),
     }),
   ),
 });
@@ -289,7 +288,7 @@ export async function analyzeArchitecture(ctx: RepoContext): Promise<Architectur
       maxTokens: 12_000,
       system:
         'You are a principal software architect. From the static-analysis facts provided, produce an accurate component-level architecture of the repository for an interactive diagram. ' +
-        'Group modules into meaningful components (5-15) by responsibility, not just by folder. Include external systems the code talks to (databases, caches, queues, third-party APIs, the browser/user if relevant) as components with empty paths. ' +
+        'Group modules into top-level components by responsibility, not just by folder. Include external systems the code talks to (databases, caches, queues, third-party APIs, the browser/user if relevant) as components with empty paths. ' +
         'Every connection must describe a real interaction supported by the import edges or infrastructure touch points, with evidence taken from the given file:line samples. Prefer kinds: http for network calls, db for persistence, queue/event for async messaging, calls for in-process calls.',
       messages: [{ role: 'user', content: architecturePrompt(ctx) }],
       schema: LlmArchSchema,
@@ -298,34 +297,7 @@ export async function analyzeArchitecture(ctx: RepoContext): Promise<Architectur
     ctx.warn,
   );
   const draft = normalize(ctx, raw);
-  if (!draft.components.length) return heuristic;
-  if (!ctx.index) return draft;
-  ctx.progress('Verifying architecture against the code', 0.5);
-  const asLlm = (a: Architecture) => ({ overview: a.overview, components: a.components, connections: a.connections.map(({ id: _i, ...e }) => e) }) as z.infer<typeof LlmArchSchema>;
-  const verified = await agentWithFallback(
-    ctx.llm,
-    {
-      system:
-        `You are a principal architect reviewing a DRAFT architecture diagram of ${ctx.repoName} for accuracy. ${AGENT_GUIDANCE}\n\n` +
-        'For every connection, confirm the interaction in code (read_file / find_references / grep): fix wrong directions or kinds, drop edges you cannot confirm, and add important missing ones ' +
-        '(network calls between services, queue publish/consume pairs matched by topic or queue name, DB access, calls to third-party APIs). ' +
-        'Set confidence=verified only for edges whose evidence lines you read. Fill protocol, sync/async, dataExchanged and direction. ' +
-        'Assign each component a layer and, for multi-package repos, a group (deployable unit/package). Keep 5-15 components and stable ids. ' +
-        'Spend at most ~10 tool calls, then submit_architecture with the complete corrected architecture (overview, components, connections).',
-      messages: [{ role: 'user', content: `# Draft architecture\n${JSON.stringify(asLlm(draft), null, 1)}\n\n# Module import edges\n${ctx.moduleEdges.slice(0, 40).map((e) => `- ${e.from} -> ${e.to} (${e.count})`).join('\n')}` }],
-      tools: repoTools(ctx.index),
-      maxSteps: 12,
-      maxTokens: 12_000,
-      final: { name: 'architecture', schema: LlmArchSchema },
-      scripted: async () => ({ final: asLlm(draft) }),
-    },
-    ctx.warn,
-  ).catch((err) => {
-    ctx.warn(`architecture verification failed: ${(err as Error).message}`);
-    return null;
-  });
-  const arch = verified?.final ? normalize(ctx, verified.final as z.infer<typeof LlmArchSchema>) : draft;
-  return arch.components.length ? arch : draft;
+  return draft.components.length ? draft : heuristic;
 }
 
 /** Map every file to the component whose path prefix matches most specifically. */

@@ -54,7 +54,6 @@ export function Repo() {
   const [repo, setRepo] = useState<RepoSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [intent, setIntent] = useState<AskIntent | null>(null);
-  const [fileTarget, setFileTarget] = useState<FileTarget | null>(null);
   const [menu, setMenu] = useState(false);
   const [commit, setCommit] = useState<{ sha: string; path?: string } | null>(null);
 
@@ -70,27 +69,43 @@ export function Repo() {
     return () => window.clearInterval(timer);
   }, [repo?.status, load]);
 
-  const setTab = useCallback((t: TabId) => setParams((p) => { p.set('tab', t); return p; }, { replace: true }), [setParams]);
+  // Tabs and the open file live in the URL, and each change adds a history entry,
+  // so the browser's Back button steps back through them.
+  const setTab = useCallback((t: TabId) => setParams((p) => { p.set('tab', t); return p; }), [setParams]);
+  const showFile = useCallback(
+    (t: FileTarget) =>
+      setParams((p) => {
+        p.set('tab', 'files');
+        p.set('path', t.path);
+        const put = (k: string, v: string | undefined) => (v ? p.set(k, v) : p.delete(k));
+        put('lines', t.startLine ? (t.endLine && t.endLine !== t.startLine ? `${t.startLine}-${t.endLine}` : String(t.startLine)) : undefined);
+        put('sym', t.symbol?.name);
+        put('symLine', t.symbol?.line ? String(t.symbol.line) : undefined);
+        return p;
+      }),
+    [setParams],
+  );
+  const [fPath, fLines, fSym, fSymLine] = ['path', 'lines', 'sym', 'symLine'].map((k) => params.get(k));
+  const fileTarget = useMemo<FileTarget | null>(() => {
+    if (!fPath) return null;
+    const [start, end] = (fLines ?? '').split('-').map(Number);
+    const symbol = fSym || fSymLine ? { name: fSym ?? undefined, line: fSymLine ? Number(fSymLine) : undefined } : undefined;
+    return { path: fPath, symbol, startLine: start || undefined, endLine: end || start || undefined };
+  }, [fPath, fLines, fSym, fSymLine]);
   const ctx = useMemo<RepoCtx | null>(
     () =>
       repo && {
         repo,
         // File links open in the Files tab (scrolled to and highlighting the cited lines).
-        openCode: (path, startLine, endLine) => {
-          setFileTarget({ path, startLine, endLine });
-          setTab('files');
-        },
+        openCode: (path, startLine, endLine) => showFile({ path, startLine, endLine }),
         askAbout: (i) => {
           setIntent(i);
           setTab('ask');
         },
         openCommit: (sha, path) => setCommit({ sha, path }),
-        openFile: (p, symbol) => {
-          setFileTarget({ path: p, symbol });
-          setTab('files');
-        },
+        openFile: (p, symbol) => showFile({ path: p, symbol }),
       },
-    [repo, setTab],
+    [repo, setTab, showFile],
   );
 
   if (error) return <div className="page"><div className="error-box">{error}</div><p><Link to="/">← Back</Link></p></div>;

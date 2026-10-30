@@ -56,7 +56,7 @@ export interface FileTarget {
 }
 
 export function FilesView({ target }: { target: FileTarget | null }) {
-  const { repo, openCode } = useRepo();
+  const { repo, openCode, openFile } = useRepo();
   const [tree, setTree] = useState<FileNode | null>(null);
   const [path, setPath] = useState<string | null>(null);
   /** Directory being shown (links can point at folders); exclusive with `path`. */
@@ -137,19 +137,13 @@ export function FilesView({ target }: { target: FileTarget | null }) {
     };
   }, [repo.id, path]);
 
-  const selectFile = (p: string) => {
-    setDir(null);
-    setPath(p);
-    setSubject({ path: p });
-  };
+  // Opening a file goes through the URL so it gets a browser history entry.
+  const selectFile = (p: string) => openFile(p);
   // Navigating the explain panel to another file also opens that file.
   const onSubject = (s: ExplainSubject) => {
+    if (s.path !== path && !s.snippet) return openFile(s.path, s.symbol);
     setSubject(s);
     setShowExplain(true);
-    if (s.path !== path) {
-      setDir(null);
-      setPath(s.path);
-    }
   };
   const toggle = (p: string) => setOpen((o) => { const n = new Set(o); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const signals = useMemo(() => ((file?.meta?.security ?? []) as { kind: string; line: number }[]).filter((s) => s.kind !== 'auth'), [file]);

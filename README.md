@@ -2,12 +2,15 @@
 
 Point the app at any Git repository. It clones the repo, maps it with static analysis plus an LLM, and builds a searchable knowledge base. You can then explore that knowledge base and ask it questions in four areas:
 
-| Area | What you get |
-|---|---|
-| **Architecture & system design** | An interactive component diagram. Click a component to see its responsibilities, files and connections. Click an arrow to see how two components interact, with the code that proves it. Double-click a component for its file-level import graph. |
-| **Code onboarding** | Setup commands, entry points, a suggested reading order, core concepts, conventions and tests. |
-| **Security** | Attack surface (routes and entry points), authentication, injection sinks, secrets and dependency risk. Findings are ranked by severity and link to code. |
-| **API & library integration** | The public API surface, an HTTP endpoint table, and how each major third-party library is used at runtime. |
+## Quick start (Docker)
+
+```bash
+cp .env.example .env        # add ANTHROPIC_API_KEY or OPENAI_API_KEY
+docker compose up -d --build
+docker compose logs app | grep "Access code"
+```
+
+Open <http://localhost:3000> and enter the 16-character code.
 
 ### Explain any file, symbol or selection
 
@@ -52,16 +55,6 @@ The explainer, diagram answers, flow tracing, architecture verification and the 
 A live trace shows each step, for example "Reading src/app.ts:1-120" and "Finding references to getUser". Structured results are validated against a schema; an invalid submission goes back to the model to fix. Without an API key, the same tools are called by a scripted static investigation, so all of these features still work offline.
 
 The **Ask** tab answers free-form questions. It detects the category automatically (or you pick one), streams the answer, and cites code as clickable `path:line` links. You can scope a question to one component, connection or file.
-
-## Quick start (Docker)
-
-```bash
-cp .env.example .env        # add ANTHROPIC_API_KEY or OPENAI_API_KEY
-docker compose up -d --build
-docker compose logs app | grep "Access code"
-```
-
-Open <http://localhost:3000> and enter the 16-character code.
 
 ### Access codes
 

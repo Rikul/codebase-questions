@@ -349,8 +349,8 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
 export async function analyzeInsights(
   ctx: RepoContext,
   arch: Architecture,
+  cats: Category[] = ['architecture', 'onboarding', 'security', 'api'],
 ): Promise<{ insights: Insight[]; questions: SuggestedQuestion[] }> {
-  const cats: Category[] = ['architecture', 'onboarding', 'security', 'api'];
   let completed = 0;
   const results = await Promise.all(
     cats.map(async (cat) => {

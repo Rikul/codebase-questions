@@ -119,15 +119,27 @@ describe('background architecture synthesis', () => {
       expect(progress[stages.indexOf('architecture')]).toBe(0.9);
       expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
       // A user action performed while synthesis is running must survive its completion.
-      db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background'`).run();
+      db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background' AND category!='architecture'`).run();
+      // Diagram answers cached against the initial diagram must not outlive it.
+      db.prepare(`INSERT INTO diagram_answers (repo_id, question, content) VALUES ('background', 'q', '{}')`).run();
     } finally {
       release();
     }
     const { architecture } = await analysis;
     expect(architecture.overview).toBe('Background architecture complete');
-    expect((db.prepare(`SELECT title FROM insights WHERE repo_id='background' LIMIT 1`).get() as any).title).toBe('User-visible result');
+    expect((db.prepare(`SELECT title FROM insights WHERE repo_id='background' AND category!='architecture' LIMIT 1`).get() as any).title).toBe('User-visible result');
+    expect(count('diagram_answers')).toBe(0);
+    // The architecture insight is rewritten from the synthesized diagram and still sorts first.
+    const archInsights = db.prepare(`SELECT body_md, position FROM insights WHERE repo_id='background' AND category='architecture' ORDER BY position`).all() as any[];
+    expect(archInsights[0].body_md).toBe('Background architecture complete');
+    const positions = (db.prepare(`SELECT position FROM insights WHERE repo_id='background' ORDER BY position`).all() as any[]).map((r) => r.position);
+    expect(positions).toEqual(positions.map((_, i) => i));
+    expect((db.prepare(`SELECT count(*) n FROM suggested_questions WHERE repo_id='background' AND category='architecture'`).get() as any).n).toBeGreaterThan(0);
+    // Flow participants follow their files to the synthesized components instead of losing links.
     const flows = (db.prepare(`SELECT content FROM flows WHERE repo_id='background'`).all() as any[]).map((r) => JSON.parse(r.content));
-    expect(flows.every((f) => f.participants.every((p: any) => !p.componentId || architecture.components.some((c) => c.id === p.componentId)))).toBe(true);
+    const links = flows.flatMap((f) => f.participants.map((p: any) => p.componentId).filter(Boolean));
+    expect(links.length).toBeGreaterThan(0);
+    expect(links.every((id: string) => id.startsWith('new-') && architecture.components.some((c) => c.id === id))).toBe(true);
     db.close();
   });
 });

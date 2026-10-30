@@ -38,10 +38,15 @@ function age(date: string) {
 const PAGE_LINES = 250;
 const HIGHLIGHT_CHARS = 50_000;
 const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+/**
+ * Above this much highlighted HTML per line, identifiers are left unlinked: walking and rebuilding
+ * the DOM for very dense lines (minified code, long generated strings) stalls rendering.
+ */
+const IDENT_LINK_MAX_HTML = 20_000;
 
 /** Wrap known identifiers inside highlighted line HTML with clickable spans. */
 function markIdentifiers(html: string, idents: Set<string>): string {
-  if (html.length > 20_000 || !idents.size || !/[A-Za-z_$]/.test(html)) return html;
+  if (html.length > IDENT_LINK_MAX_HTML || !idents.size || !/[A-Za-z_$]/.test(html)) return html;
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
   const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);

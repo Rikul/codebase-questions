@@ -9,5 +9,7 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: false } },
   },
+  // ES-module workers keep code splitting, so shiki grammars load per language instead of all at once.
+  worker: { format: 'es' },
   build: { outDir: 'dist', chunkSizeWarningLimit: 2000 },
 });

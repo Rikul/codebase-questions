@@ -100,6 +100,8 @@ function emitter(db: DB, jobId: string) {
     const ev: JobEvent = { jobId, stage, message, progress: Math.max(0, Math.min(1, progress)), ...extra };
     const now = Date.now();
     if (stage !== lastStage) {
+      // A stage only ends in failure when the next event is the job's 'failed' event, so the outcome of
+      // `lastStage` is decided by the incoming `stage`.
       if (lastStage) log('info', 'analysis.stage.finished', { stage: lastStage, durationMs: now - stageStarted, outcome: stage === 'failed' ? 'failed' : 'completed' });
       log('info', 'analysis.stage.started', { stage, progress: ev.progress });
       stageStarted = now;
@@ -307,19 +309,30 @@ export async function analyzeDirectory(
   ctx.progress = (m, p) => progress('architecture', m, p);
   try {
     const synthesized = await analyzeArchitecture(ctx);
-    // Persist only architecture: users may already be reading or changing other results.
+    // The architecture insight was written from the heuristic diagram; rewrite it from the final one.
+    ctx.progress = (m) => progress('architecture', m, 0.9);
+    const archInsights = await analyzeInsights(ctx, synthesized, ['architecture']);
+    // Persist only architecture-derived results: users may already be reading or changing other results.
     db.transaction(() => {
       if (!db.prepare('SELECT 1 FROM repos WHERE id=?').get(repoId)) return;
       saveArchitecture(db, repoId, synthesized);
+      replaceCategoryInsights(db, repoId, 'architecture', archInsights.insights, archInsights.questions);
       const assignments = assignFilesToComponents(ctx, synthesized);
       db.prepare(`UPDATE files SET meta=json_remove(coalesce(meta,'{}'), '$.component') WHERE repo_id=?`).run(repoId);
       for (const [p, c] of assignments) updMeta.run(c, repoId, p);
-      // Existing flows remain useful even when synthesis changes component ids.
+      // Flows were traced against the heuristic diagram: move each participant to the synthesized
+      // component that took over most of its files, and drop links that have no successor.
       const ids = new Set(synthesized.components.map((c) => c.id));
+      const successor = componentSuccessors(fileComp, assignments);
       const rows = db.prepare('SELECT id, content FROM flows WHERE repo_id=?').all(repoId) as { id: string; content: string }[];
       for (const row of rows) {
         const flow = JSON.parse(row.content);
-        for (const p of flow.participants) if (p.componentId && !ids.has(p.componentId)) delete p.componentId;
+        for (const p of flow.participants) {
+          if (!p.componentId || ids.has(p.componentId)) continue;
+          const next = successor.get(p.componentId);
+          if (next) p.componentId = next;
+          else delete p.componentId;
+        }
         db.prepare('UPDATE flows SET content=? WHERE repo_id=? AND id=?').run(JSON.stringify(flow), repoId, row.id);
       }
     })();
@@ -331,6 +344,40 @@ export async function analyzeDirectory(
   }
 }
 
+/** For each old component id, the new component id that most of its files were assigned to. */
+function componentSuccessors(before: Map<string, string>, after: Map<string, string>): Map<string, string> {
+  const counts = new Map<string, Map<string, number>>();
+  for (const [file, oldId] of before) {
+    const newId = after.get(file);
+    if (!newId) continue;
+    const c = counts.get(oldId) ?? new Map<string, number>();
+    c.set(newId, (c.get(newId) ?? 0) + 1);
+    counts.set(oldId, c);
+  }
+  const out = new Map<string, string>();
+  for (const [oldId, c] of counts) out.set(oldId, [...c].sort((a, b) => b[1] - a[1])[0]![0]);
+  return out;
+}
+
+/** Swap one category's insights and suggested questions, keeping it ahead of the other categories. */
+function replaceCategoryInsights(
+  db: DB,
+  repoId: string,
+  category: string,
+  insights: { kind: string; title: string; bodyMd: string; severity?: string; refs: unknown[] }[],
+  questions: { question: string }[],
+) {
+  db.prepare('DELETE FROM insights WHERE repo_id=? AND category=?').run(repoId, category);
+  db.prepare('DELETE FROM suggested_questions WHERE repo_id=? AND category=?').run(repoId, category);
+  const rest = db.prepare('SELECT id FROM insights WHERE repo_id=? ORDER BY position').all(repoId) as { id: number }[];
+  const pos = db.prepare('UPDATE insights SET position=? WHERE id=?');
+  rest.forEach((r, n) => pos.run(insights.length + n, r.id));
+  const ii = db.prepare('INSERT INTO insights (repo_id, category, kind, title, body_md, severity, refs, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  insights.forEach((i, n) => ii.run(repoId, category, i.kind, i.title, i.bodyMd, i.severity ?? null, JSON.stringify(i.refs), n));
+  const iq = db.prepare('INSERT INTO suggested_questions (repo_id, category, question) VALUES (?, ?, ?)');
+  for (const q of questions) iq.run(repoId, category, q.question);
+}
+
 export function saveAnalysis(
   db: DB,
   repoId: string,
@@ -339,8 +386,9 @@ export function saveAnalysis(
   questions: { category: string; question: string }[],
 ) {
   db.transaction(() => {
-    for (const t of ['connections', 'components', 'insights', 'suggested_questions']) db.prepare(`DELETE FROM ${t} WHERE repo_id=?`).run(repoId);
+    for (const t of ['insights', 'suggested_questions']) db.prepare(`DELETE FROM ${t} WHERE repo_id=?`).run(repoId);
     if (arch) saveArchitecture(db, repoId, arch);
+    else clearArchitecture(db, repoId);
     const ii = db.prepare('INSERT INTO insights (repo_id, category, kind, title, body_md, severity, refs, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     insights.forEach((i, n) => ii.run(repoId, i.category, i.kind, i.title, i.bodyMd, i.severity ?? null, JSON.stringify(i.refs), n));
     const iq = db.prepare('INSERT INTO suggested_questions (repo_id, category, question) VALUES (?, ?, ?)');
@@ -353,8 +401,14 @@ export function deleteRepo(db: DB, repoId: string) {
   fs.rmSync(repoDir(repoId), { recursive: true, force: true });
 }
 
+/** Remove the diagram and everything cached against its component/connection ids. */
+function clearArchitecture(db: DB, repoId: string) {
+  for (const table of ['connections', 'components', 'diagram_answers']) db.prepare(`DELETE FROM ${table} WHERE repo_id=?`).run(repoId);
+}
+
+/** Replace the diagram. Also used on its own when background synthesis publishes a new architecture. */
 function saveArchitecture(db: DB, repoId: string, arch: Architecture) {
-  for (const table of ['connections', 'components']) db.prepare(`DELETE FROM ${table} WHERE repo_id=?`).run(repoId);
+  clearArchitecture(db, repoId);
 
   db.prepare('UPDATE repos SET overview=? WHERE id=?').run(arch.overview, repoId);
   const ic = db.prepare('INSERT INTO components (repo_id, id, name, type, description, responsibilities, paths, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');

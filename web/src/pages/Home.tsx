@@ -20,10 +20,14 @@ export function useJobProgress(jobId: string | null, onDone?: () => void) {
     setEv(null);
     if (!jobId) return;
     const es = new EventSource(`/api/jobs/${jobId}/events`);
+    let stage: string | null = null;
     es.onmessage = (m) => {
       const e = JSON.parse(m.data) as JobEvent;
       setEv(e);
-      if (e.stage === 'architecture' && !e.done) done.current?.();
+      // Results become readable when the job enters the background architecture stage; refresh once.
+      const entered = e.stage !== stage;
+      stage = e.stage;
+      if (entered && e.stage === 'architecture' && !e.done) done.current?.();
       if (e.done) {
         es.close();
         done.current?.();

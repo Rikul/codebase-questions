@@ -24,9 +24,12 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
+// The last step runs after results are shown (repo status 'enriching'), when this view is gone.
+const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'architecture');
+
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const cur = ANALYSIS_STEPS.findIndex((step) => step.id === (ev?.stage === 'embed' ? 'index' : ev?.stage));
+  const cur = FOREGROUND_STEPS.findIndex((step) => step.id === (ev?.stage === 'embed' ? 'index' : ev?.stage));
   return (
     <div className="page" style={{ maxWidth: 640 }}>
       <div className="card" style={{ padding: 24 }}>
@@ -35,10 +38,11 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {ANALYSIS_STEPS.map((step, i) => (
+          {FOREGROUND_STEPS.map((step, i) => (
             <li key={step.id} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{step.label}</li>
           ))}
         </ol>
+        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the architecture diagram is then refined in the background.</p>
       </div>
     </div>
   );

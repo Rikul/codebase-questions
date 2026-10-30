@@ -136,7 +136,12 @@ export function Repo() {
           <>
             {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis is running in the background; the diagram will update automatically.</div>}
             {repo.status === 'failed' && <div className="error-box" style={{ margin: 12 }}>Analysis failed: {repo.error}</div>}
-            {repo.status === 'ready' && repo.error && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>⚠ {repo.error.split('\n')[0]}</div>}
+            {repo.status === 'ready' && repo.error && (
+              <details className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>
+                <summary>⚠ Analysis completed with warnings — show details</summary>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 8 }}>{repo.error}</div>
+              </details>
+            )}
             {repo.status === 'imported' && !repo.hasSource && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>Imported without source code. Search uses file summaries, and Re-analyze will clone the repository again.</div>}
             <nav className="tabs">
               {TABS.map((t) => (

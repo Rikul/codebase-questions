@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import { config } from '../config.js';
 import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic.js';
 import { MockProvider } from './mock.js';
@@ -29,6 +30,19 @@ export function createEmbeddings(): EmbeddingProvider | null {
   return null;
 }
 
+/** Keep validation failures readable without including model response contents. */
+export function modelErrorMessage(err: unknown): string {
+  if (err instanceof ZodError) {
+    const issues = err.issues.slice(0, 3).map((issue) => {
+      const path = issue.path.length ? issue.path.join('.') : 'response';
+      return `${path}: ${issue.message.replace(/\s+/g, ' ')}`;
+    });
+    const more = err.issues.length > 3 ? `; +${err.issues.length - 3} more issue(s)` : '';
+    return `response validation failed: ${issues.join('; ')}${more}`;
+  }
+  return (err instanceof Error ? err.message : String(err)).replace(/\s+/g, ' ');
+}
+
 /** Structured call that falls back to the heuristic if the model call fails or returns invalid data. */
 export async function jsonWithFallback<T>(
   llm: LLMProvider,
@@ -39,7 +53,7 @@ export async function jsonWithFallback<T>(
     return await llm.completeJSON(opts);
   } catch (err) {
     if (!opts.heuristic) throw err;
-    onWarn?.(`${opts.name}: model call failed (${(err as Error).message}); using static analysis instead`);
+    onWarn?.(`${opts.name}: model call failed (${modelErrorMessage(err)}); using static analysis instead`);
     return opts.schema.parse(opts.heuristic());
   }
 }
@@ -52,7 +66,7 @@ export async function agentWithFallback<T>(llm: LLMProvider, opts: AgentOptions<
     return r;
   } catch (err) {
     if (!opts.scripted || llm.name === 'mock') throw err;
-    onWarn?.(`agent run failed (${(err as Error).message}); using static analysis instead`);
+    onWarn?.(`agent run failed (${modelErrorMessage(err)}); using static analysis instead`);
     return new MockProvider().runAgent(opts);
   }
 }

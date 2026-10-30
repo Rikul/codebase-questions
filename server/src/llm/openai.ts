@@ -48,7 +48,7 @@ export class OpenAIProvider implements LLMProvider {
           this.client.chat.completions.create({
             model: this.pick(opts.fast),
             messages,
-            max_completion_tokens: opts.maxTokens ?? 8192,
+            max_completion_tokens: opts.maxTokens ?? 16_384,
             response_format: { type: 'json_schema', json_schema: { name: opts.name, schema, strict: false } },
           }),
         );
@@ -67,7 +67,7 @@ export class OpenAIProvider implements LLMProvider {
       this.client.chat.completions.create({
         model: this.pick(opts.fast),
         messages,
-        max_completion_tokens: opts.maxTokens ?? 8192,
+        max_completion_tokens: opts.maxTokens ?? 16_384,
         response_format: { type: 'json_object' },
       }),
     );
@@ -117,7 +117,7 @@ export class OpenAIProvider implements LLMProvider {
           messages,
           tools,
           tool_choice: forceFinal ? { type: 'function', function: { name: submitName(fin!) } } : noTools ? 'none' : 'auto',
-          max_completion_tokens: opts.maxTokens ?? 8192,
+          max_completion_tokens: opts.maxTokens ?? 16_384,
           stream: true,
         }),
       );

@@ -11,7 +11,7 @@ import { agentWithFallback } from '../llm/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { slug } from './context.js';
 
-const FlowsOut = z.object({ flows: z.array(FlowSchema).describe('3-6 of the most important end-to-end flows') });
+const FlowsOut = z.object({ flows: z.array(FlowSchema).max(10).describe('Up to 10 of the most important end-to-end flows') });
 
 const DB_PKGS = /^(pg|postgres|mysql2?|mongoose|mongodb|sqlite3|better-sqlite3|prisma|@prisma\/client|sequelize|typeorm|knex|drizzle-orm|redis|ioredis|sqlalchemy|psycopg2?|pymongo|gorm)/;
 const QUEUE_PKGS = /^(amqplib|kafkajs|bullmq|bull|celery|kombu|nats|@aws-sdk\/client-sqs)/;
@@ -44,7 +44,7 @@ export function heuristicFlows(ix: RepoIndex, arch: Architecture): Flow[] {
     .all(ix.repoId) as { path: string; name: string; line: number; end_line: number }[];
   const nonTest = routeSyms.filter((r) => !json<any>(ix.fileRow(r.path)?.meta, {}).isTest && !/(^|\/)(examples?|test)\//.test(r.path));
   const flows: Flow[] = [];
-  for (const r of (nonTest.length ? nonTest : routeSyms).slice(0, 4)) {
+  for (const r of (nonTest.length ? nonTest : routeSyms).slice(0, 10)) {
     const participants = new Map<string, Flow['participants'][number]>();
     const add = (p: Flow['participants'][number]) => (participants.has(p.id) ? p.id : (participants.set(p.id, p), p.id));
     const client = add({ id: 'client', label: 'Client' });
@@ -152,7 +152,7 @@ export async function analyzeFlows(llm: LLMProvider, ix: RepoIndex, warn: (m: st
             `# Components\n${arch.components.map((c) => `- ${c.id}: ${c.name} [${c.type}] ${c.paths.join(', ')}`).join('\n')}`,
             routes.length ? `# Route handlers\n${routes.map((r) => `- ${r.name} (${r.path}:${r.line})`).join('\n')}` : '',
             `# Entry points\n${entries.map((e) => `- ${e.path}`).join('\n')}`,
-            'Pick the 3-6 flows a new engineer most needs to understand (main request paths, background jobs, startup), trace each, then submit_flows.',
+            'Pick up to 10 distinct important flows a new engineer most needs to understand (main request paths, background jobs, startup), trace each, then submit_flows.',
           ]
             .filter(Boolean)
             .join('\n\n'),

@@ -499,7 +499,7 @@ export function ArchDiagram() {
   useEffect(() => {
     api<Architecture>(`/repos/${repo.id}/architecture`).then(setArch, (e) => setError(e.message));
     loadFlows();
-  }, [repo.id, repo.updatedAt, loadFlows]);
+  }, [repo.id, repo.updatedAt, repo.status, loadFlows]);
 
   if (error) return <div className="empty">{error}</div>;
   if (!arch) return <div className="empty"><span className="spinner" /></div>;

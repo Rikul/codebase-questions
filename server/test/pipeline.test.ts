@@ -87,3 +87,42 @@ describe('analysis pipeline (offline provider)', () => {
     expect(() => importProject(db, { format: 'nope' })).toThrow(/Invalid export file/);
   });
 });
+
+describe('background architecture synthesis', () => {
+  it('publishes insights and flows before synthesis and preserves them when architecture changes', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('background', 'sample', 'https://github.com/acme/sample', 'running')`).run();
+    const mock = new MockProvider();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let ready!: () => void;
+    const resultsReady = new Promise<void>((resolve) => { ready = resolve; });
+    const llm = Object.create(mock) as import('../src/llm/provider.js').LLMProvider;
+    Object.defineProperty(llm, 'name', { value: 'test' });
+    llm.completeJSON = async <T,>(opts: import('../src/llm/provider.js').JSONOptions<T>): Promise<T> => {
+      if (opts.name !== 'architecture') return mock.completeJSON(opts);
+      await blocked;
+      const raw = opts.heuristic!() as any;
+      return opts.schema.parse({ ...raw, overview: 'Background architecture complete', components: raw.components.map((c: any) => ({ ...c, id: `new-${c.id}` })), connections: [] });
+    };
+    const stages: string[] = [];
+    const analysis = analyzeDirectory(db, llm, null, 'background', FIXTURE, (stage) => stages.push(stage), () => undefined, null, ready);
+    await resultsReady;
+    const count = (table: string) => (db.prepare(`SELECT count(*) n FROM ${table} WHERE repo_id='background'`).get() as { n: number }).n;
+    try {
+      expect(count('insights')).toBeGreaterThan(0);
+      expect(count('flows')).toBeGreaterThan(0);
+      expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('flows'));
+      // A user action performed while synthesis is running must survive its completion.
+      db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background'`).run();
+    } finally {
+      release();
+    }
+    const { architecture } = await analysis;
+    expect(architecture.overview).toBe('Background architecture complete');
+    expect((db.prepare(`SELECT title FROM insights WHERE repo_id='background' LIMIT 1`).get() as any).title).toBe('User-visible result');
+    const flows = (db.prepare(`SELECT content FROM flows WHERE repo_id='background'`).all() as any[]).map((r) => JSON.parse(r.content));
+    expect(flows.every((f) => f.participants.every((p: any) => !p.componentId || architecture.components.some((c) => c.id === p.componentId)))).toBe(true);
+    db.close();
+  });
+});

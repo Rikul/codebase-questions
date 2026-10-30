@@ -25,7 +25,7 @@ type TabId = (typeof TABS)[number]['id'];
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const stages = ['clone', 'scan', 'parse', 'index', 'history', 'summarize', 'architecture', 'insights', 'store', 'flows'];
+  const stages = ['clone', 'scan', 'parse', 'index', 'history', 'summarize', 'insights', 'store', 'flows', 'architecture'];
   const cur = stages.indexOf(ev?.stage ?? '');
   return (
     <div className="page" style={{ maxWidth: 640 }}>
@@ -35,7 +35,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Index git history', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save', 'Trace key flows'].map((s, i) => (
+          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Index git history', 'Summarize key files with the LLM', 'Write onboarding, security and API insights', 'Save', 'Trace key flows', 'Synthesize architecture in background'].map((s, i) => (
             <li key={s} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{s}</li>
           ))}
         </ol>
@@ -61,6 +61,13 @@ export function Repo() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useJobProgress(repo?.status === 'enriching' ? repo.currentJobId : null, load);
+  useEffect(() => {
+    if (repo?.status !== 'enriching') return;
+    const timer = window.setInterval(load, 3000);
+    return () => window.clearInterval(timer);
+  }, [repo?.status, load]);
 
   const setTab = useCallback((t: TabId) => setParams((p) => { p.set('tab', t); return p; }, { replace: true }), [setParams]);
   const ctx = useMemo<RepoCtx | null>(
@@ -113,7 +120,7 @@ export function Repo() {
           </div>
           <button
             className="btn sm"
-            disabled={busy || !repo.url.startsWith('https://')}
+            disabled={busy || repo.status === 'enriching' || !repo.url.startsWith('https://')}
             onClick={async () => {
               await post(`/repos/${repo.id}/reanalyze`);
               load();
@@ -127,6 +134,7 @@ export function Repo() {
           <Progress repo={repo} onDone={load} />
         ) : (
           <>
+            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis is running in the background; the diagram will update automatically.</div>}
             {repo.status === 'failed' && <div className="error-box" style={{ margin: 12 }}>Analysis failed: {repo.error}</div>}
             {repo.status === 'ready' && repo.error && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>⚠ {repo.error.split('\n')[0]}</div>}
             {repo.status === 'imported' && !repo.hasSource && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>Imported without source code. Search uses file summaries, and Re-analyze will clone the repository again.</div>}

@@ -101,7 +101,7 @@ export const SuggestedQuestionSchema = z.object({
 });
 export type SuggestedQuestion = z.infer<typeof SuggestedQuestionSchema>;
 
-export type RepoStatus = 'queued' | 'running' | 'ready' | 'failed' | 'imported';
+export type RepoStatus = 'queued' | 'running' | 'enriching' | 'ready' | 'failed' | 'imported';
 
 export interface RepoSummary {
   id: string;

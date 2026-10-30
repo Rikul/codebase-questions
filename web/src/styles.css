@@ -445,3 +445,5 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .blame-btn { all: unset; display: flex; gap: 6px; width: 100%; cursor: pointer; border-radius: 3px; }
 .blame-btn:hover { color: var(--accent); }
 .blame-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.status.enriching { color: var(--accent); }

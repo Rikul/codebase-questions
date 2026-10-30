@@ -7,7 +7,7 @@ import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
-import { analyzeArchitecture, assignFilesToComponents } from '../analyze/architecture.js';
+import { analyzeArchitecture, assignFilesToComponents, heuristicArchitecture } from '../analyze/architecture.js';
 import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
@@ -64,6 +64,7 @@ export function initJobs(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider
   deps = { db, llm, embeddings };
   // Jobs interrupted by a restart are marked failed.
   db.prepare(`UPDATE jobs SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
+  db.prepare(`UPDATE repos SET status='ready', error='Background architecture synthesis interrupted by server restart' WHERE status='enriching'`).run();
   db.prepare(`UPDATE repos SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
 }
 
@@ -91,10 +92,12 @@ async function drain() {
 
 function emitter(db: DB, jobId: string) {
   let last = 0;
+  let lastStage = '';
   return (stage: string, message: string, progress: number, extra: Partial<JobEvent> = {}) => {
     const ev: JobEvent = { jobId, stage, message, progress: Math.max(0, Math.min(1, progress)), ...extra };
     const now = Date.now();
-    if (now - last > 250 || extra.done || extra.error) {
+    if (stage !== lastStage || now - last > 250 || extra.done || extra.error) {
+      lastStage = stage;
       last = now;
       db.prepare(`UPDATE jobs SET stage=?, message=?, progress=?, updated_at=datetime('now') WHERE id=?`).run(stage, message, ev.progress, jobId);
     }
@@ -115,7 +118,10 @@ export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProv
     const { commit, history, warnings: cloneWarnings } = await cloneRepo(parseRepoUrl(repo.url), dir);
     warnings.push(...cloneWarnings);
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
-    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w), history);
+    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w), history, () => {
+      db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
+      emit('architecture', 'Results available; synthesizing architecture in the background', 0.935);
+    });
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
     emit('done', warnings.length ? `Ready (with ${warnings.length} warning(s))` : 'Ready', 1, { done: true });
@@ -138,6 +144,7 @@ export async function analyzeDirectory(
   progress: (stage: string, message: string, fraction: number) => void,
   warn: (msg: string) => void = () => undefined,
   history: HistoryInfo | null = null,
+  onResultsReady: () => void = () => undefined,
 ): Promise<{ architecture: Architecture }> {
   const repo = db.prepare('SELECT name FROM repos WHERE id=?').get(repoId) as { name: string };
   progress('scan', 'Scanning files', 0.0);
@@ -251,34 +258,52 @@ export async function analyzeDirectory(
     }
   })();
 
-  progress('architecture', 'Synthesizing architecture', 0.62);
-  ctx.progress = (m, p) => progress('architecture', m, 0.62 + 0.1 * p);
-  let t = Date.now();
-  const arch = await analyzeArchitecture(ctx);
-  const synthSec = ((Date.now() - t) / 1000).toFixed(1);
-  progress('architecture', `Assigning files to components (synthesis took ${synthSec}s)`, 0.72);
-  t = Date.now();
+  const arch = heuristicArchitecture(ctx);
   const fileComp = assignFilesToComponents(ctx, arch);
-  console.log(`[${repoId}] architecture: synthesis ${synthSec}s, file assignment ${((Date.now() - t) / 1000).toFixed(1)}s`);
 
-  progress('insights', 'Writing onboarding, security and API insights', 0.75);
-  ctx.progress = (m, p) => progress('insights', m, 0.75 + 0.22 * p);
+  progress('insights', 'Writing onboarding, security and API insights', 0.62);
+  ctx.progress = (m, p) => progress('insights', m, 0.62 + 0.25 * p);
   const { insights, questions } = await analyzeInsights(ctx, arch);
 
-  progress('store', 'Saving knowledge base', 0.98);
+  progress('store', 'Saving knowledge base', 0.90);
   saveAnalysis(db, repoId, arch, insights, questions);
   const updMeta = db.prepare(`UPDATE files SET meta=json_set(coalesce(meta,'{}'), '$.component', ?) WHERE repo_id=? AND path=?`);
   db.transaction(() => {
     for (const [p, c] of fileComp) updMeta.run(c, repoId, p);
   })();
 
-  progress('flows', 'Tracing key flows for sequence diagrams', 0.985);
+  progress('flows', 'Tracing key flows for sequence diagrams', 0.92);
   try {
     saveFlows(db, repoId, await analyzeFlows(llm, ctx.index, warn));
   } catch (err) {
     warn(`Flow tracing failed: ${(err as Error).message}`);
   }
-  return { architecture: arch };
+  onResultsReady();
+  progress('architecture', 'Synthesizing architecture in the background', 0.95);
+  ctx.progress = (m, p) => progress('architecture', m, 0.95 + 0.04 * p);
+  try {
+    const synthesized = await analyzeArchitecture(ctx);
+    // Persist only architecture: users may already be reading or changing other results.
+    db.transaction(() => {
+      if (!db.prepare('SELECT 1 FROM repos WHERE id=?').get(repoId)) return;
+      saveArchitecture(db, repoId, synthesized);
+      const assignments = assignFilesToComponents(ctx, synthesized);
+      db.prepare(`UPDATE files SET meta=json_remove(coalesce(meta,'{}'), '$.component') WHERE repo_id=?`).run(repoId);
+      for (const [p, c] of assignments) updMeta.run(c, repoId, p);
+      // Existing flows remain useful even when synthesis changes component ids.
+      const ids = new Set(synthesized.components.map((c) => c.id));
+      const rows = db.prepare('SELECT id, content FROM flows WHERE repo_id=?').all(repoId) as { id: string; content: string }[];
+      for (const row of rows) {
+        const flow = JSON.parse(row.content);
+        for (const p of flow.participants) if (p.componentId && !ids.has(p.componentId)) delete p.componentId;
+        db.prepare('UPDATE flows SET content=? WHERE repo_id=? AND id=?').run(JSON.stringify(flow), repoId, row.id);
+      }
+    })();
+    return { architecture: synthesized };
+  } catch (err) {
+    warn(`Architecture synthesis failed: ${(err as Error).message}; keeping static architecture`);
+    return { architecture: arch };
+  }
 }
 
 export function saveAnalysis(
@@ -289,20 +314,8 @@ export function saveAnalysis(
   questions: { category: string; question: string }[],
 ) {
   db.transaction(() => {
-    for (const t of ['components', 'connections', 'insights', 'suggested_questions']) db.prepare(`DELETE FROM ${t} WHERE repo_id=?`).run(repoId);
-    if (arch) {
-      db.prepare('UPDATE repos SET overview=? WHERE id=?').run(arch.overview, repoId);
-      const ic = db.prepare('INSERT INTO components (repo_id, id, name, type, description, responsibilities, paths, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const c of arch.components) {
-        const { id, name, type, description, responsibilities, paths, ...extra } = c;
-        ic.run(repoId, id, name, type, description, JSON.stringify(responsibilities ?? []), JSON.stringify(paths ?? []), JSON.stringify(extra));
-      }
-      const ie = db.prepare('INSERT INTO connections (repo_id, id, src, dst, kind, label, description, evidence, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const e of arch.connections) {
-        const { id, from, to, kind, label, description, evidence, ...extra } = e;
-        ie.run(repoId, id, from, to, kind, label, description, JSON.stringify(evidence ?? []), JSON.stringify(extra));
-      }
-    }
+    for (const t of ['connections', 'components', 'insights', 'suggested_questions']) db.prepare(`DELETE FROM ${t} WHERE repo_id=?`).run(repoId);
+    if (arch) saveArchitecture(db, repoId, arch);
     const ii = db.prepare('INSERT INTO insights (repo_id, category, kind, title, body_md, severity, refs, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
     insights.forEach((i, n) => ii.run(repoId, i.category, i.kind, i.title, i.bodyMd, i.severity ?? null, JSON.stringify(i.refs), n));
     const iq = db.prepare('INSERT INTO suggested_questions (repo_id, category, question) VALUES (?, ?, ?)');
@@ -313,4 +326,20 @@ export function saveAnalysis(
 export function deleteRepo(db: DB, repoId: string) {
   db.prepare('DELETE FROM repos WHERE id=?').run(repoId);
   fs.rmSync(repoDir(repoId), { recursive: true, force: true });
+}
+
+function saveArchitecture(db: DB, repoId: string, arch: Architecture) {
+  for (const table of ['connections', 'components']) db.prepare(`DELETE FROM ${table} WHERE repo_id=?`).run(repoId);
+
+  db.prepare('UPDATE repos SET overview=? WHERE id=?').run(arch.overview, repoId);
+  const ic = db.prepare('INSERT INTO components (repo_id, id, name, type, description, responsibilities, paths, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const c of arch.components) {
+    const { id, name, type, description, responsibilities, paths, ...extra } = c;
+    ic.run(repoId, id, name, type, description, JSON.stringify(responsibilities ?? []), JSON.stringify(paths ?? []), JSON.stringify(extra));
+  }
+  const ie = db.prepare('INSERT INTO connections (repo_id, id, src, dst, kind, label, description, evidence, extra) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  for (const e of arch.connections) {
+    const { id, from, to, kind, label, description, evidence, ...extra } = e;
+    ie.run(repoId, id, from, to, kind, label, description, JSON.stringify(evidence ?? []), JSON.stringify(extra));
+  }
 }

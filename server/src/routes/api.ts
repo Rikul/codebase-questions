@@ -147,7 +147,7 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   r.post('/repos/:id/reanalyze', (req, res) => {
     const row = getRepo(req, res);
     if (!row) return;
-    if (row.status === 'running' || row.status === 'queued') return void res.status(409).json({ error: 'Analysis already in progress' });
+    if (row.status === 'running' || row.status === 'queued' || row.status === 'enriching') return void res.status(409).json({ error: 'Analysis already in progress' });
     invalidateVectors(row.id);
     res.json({ jobId: enqueue(db, row.id) });
   });

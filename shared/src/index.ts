@@ -355,3 +355,23 @@ export const ExportSchema = z.object({
     .optional(),
 });
 export type ProjectExport = z.infer<typeof ExportSchema>;
+
+/** Ordered analysis stages shared by job reporting and the progress UI. */
+export const ANALYSIS_STEPS = [
+  { id: 'clone', label: 'Clone repository' },
+  { id: 'scan', label: 'Scan files' },
+  { id: 'parse', label: 'Parse imports, routes and signals' },
+  { id: 'index', label: 'Build search index' },
+  { id: 'history', label: 'Index git history' },
+  { id: 'summarize', label: 'Summarize key files with the LLM' },
+  { id: 'insights', label: 'Write architecture, onboarding, security and API insights' },
+  { id: 'store', label: 'Save insights and initial diagram' },
+  { id: 'flows', label: 'Trace and save key flows' },
+  { id: 'architecture', label: 'Synthesize and update architecture in background' },
+] as const;
+
+export function analysisProgress(stage: string, fraction = 0): number {
+  if (stage === 'done') return 1;
+  const index = ANALYSIS_STEPS.findIndex((step) => step.id === (stage === 'embed' ? 'index' : stage));
+  return index < 0 ? 0 : (index + Math.max(0, Math.min(1, fraction))) / ANALYSIS_STEPS.length;
+}

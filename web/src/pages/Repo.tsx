@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Category, RepoSummary } from '@cq/shared';
+import { ANALYSIS_STEPS } from '@cq/shared';
 import { api, post } from '../lib/api';
 import { CATEGORY_META } from '../lib/format';
 import type { AskIntent, RepoCtx } from '../lib/repoContext';
@@ -25,8 +26,7 @@ type TabId = (typeof TABS)[number]['id'];
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const stages = ['clone', 'scan', 'parse', 'index', 'history', 'summarize', 'insights', 'store', 'flows', 'architecture'];
-  const cur = stages.indexOf(ev?.stage ?? '');
+  const cur = ANALYSIS_STEPS.findIndex((step) => step.id === (ev?.stage === 'embed' ? 'index' : ev?.stage));
   return (
     <div className="page" style={{ maxWidth: 640 }}>
       <div className="card" style={{ padding: 24 }}>
@@ -35,8 +35,8 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Index git history', 'Summarize key files with the LLM', 'Write onboarding, security and API insights', 'Save', 'Trace key flows', 'Synthesize architecture in background'].map((s, i) => (
-            <li key={s} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{s}</li>
+          {ANALYSIS_STEPS.map((step, i) => (
+            <li key={step.id} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{step.label}</li>
           ))}
         </ol>
       </div>

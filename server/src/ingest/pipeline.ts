@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Architecture, JobEvent, RepoSummary } from '@cq/shared';
+import { analysisProgress } from '@cq/shared';
 import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
@@ -114,13 +115,13 @@ export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProv
   const warnings: string[] = [];
   try {
     const dir = repoDir(repoId);
-    emit('clone', `Cloning ${repo.url}`, 0.02);
+    emit('clone', `Cloning ${repo.url}`, analysisProgress('clone'));
     const { commit, history, warnings: cloneWarnings } = await cloneRepo(parseRepoUrl(repo.url), dir);
     warnings.push(...cloneWarnings);
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
-    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, 0.08 + p * 0.9), (w) => warnings.push(w), history, () => {
+    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => warnings.push(w), history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
-      emit('architecture', 'Results available; synthesizing architecture in the background', 0.935);
+      emit('architecture', 'Results available; synthesizing architecture in the background', analysisProgress('architecture'));
     });
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
@@ -141,17 +142,18 @@ export async function analyzeDirectory(
   embeddings: EmbeddingProvider | null,
   repoId: string,
   dir: string,
-  progress: (stage: string, message: string, fraction: number) => void,
+  reportProgress: (stage: string, message: string, fraction: number) => void,
   warn: (msg: string) => void = () => undefined,
   history: HistoryInfo | null = null,
   onResultsReady: () => void = () => undefined,
 ): Promise<{ architecture: Architecture }> {
+  const progress = (stage: string, message: string, fraction = 0) => reportProgress(stage, message, analysisProgress(stage, fraction));
   const repo = db.prepare('SELECT name FROM repos WHERE id=?').get(repoId) as { name: string };
   progress('scan', 'Scanning files', 0.0);
   const files = scanRepo(dir, { maxFileBytes: config.ingest.maxFileBytes, maxFiles: config.ingest.maxRepoFiles });
   if (!files.length) throw new Error('No readable source files found in the repository');
 
-  progress('parse', `Parsing ${files.length} files`, 0.04);
+  progress('parse', `Parsing ${files.length} files`, 0);
   const facts = new Map<string, FileFacts>();
   for (const f of files) facts.set(f.path, parseFile(f.path, f.lang, f.content));
   const manifestFiles = new Map<string, string>();
@@ -188,7 +190,7 @@ export async function analyzeDirectory(
     cached.set(r.path, { hash: r.summary_hash, summary: r.summary });
   }
 
-  progress('index', 'Building search index', 0.08);
+  progress('index', 'Building search index', 0);
   clearAnalysis(db, repoId);
   const insFile = db.prepare(
     `INSERT INTO files (repo_id, path, lang, size, hash, lines, meta) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -221,14 +223,14 @@ export async function analyzeDirectory(
   })();
 
   if (embeddings) {
-    progress('embed', `Embedding ${chunkIds.length} chunks`, 0.12);
+    progress('embed', `Embedding ${chunkIds.length} chunks`, 0.5);
     try {
       const upd = db.prepare('UPDATE chunks SET embedding=? WHERE id=?');
       for (let i = 0; i < chunkIds.length; i += 256) {
         const slice = chunkIds.slice(i, i + 256);
         const vecs = await embeddings.embed(slice.map((c) => c.text));
         db.transaction(() => slice.forEach((c, j) => upd.run(Buffer.from(vecs[j].buffer), c.id)))();
-        progress('embed', `Embedded ${Math.min(i + 256, chunkIds.length)}/${chunkIds.length} chunks`, 0.12 + 0.1 * ((i + 256) / chunkIds.length));
+        progress('embed', `Embedded ${Math.min(i + 256, chunkIds.length)}/${chunkIds.length} chunks`, 0.5 + 0.5 * (Math.min(i + 256, chunkIds.length) / chunkIds.length));
       }
     } catch (err) {
       warn(`Embeddings failed (${(err as Error).message}); keyword search only`);
@@ -237,18 +239,18 @@ export async function analyzeDirectory(
 
   ctx.index = new RepoIndex(db, repoId, embeddings);
   if (history) {
-    progress('history', 'Indexing git history', 0.22);
+    progress('history', 'Indexing git history', 0);
     try {
       const { commits } = await indexHistory(db, repoId, dir, history, config.ingest.historyIndexCommits);
       storeFileHistorySummaries(db, repoId);
-      progress('history', `Indexed ${commits} commits`, 0.24);
+      progress('history', `Indexed ${commits} commits`, 1);
     } catch (err) {
       warn(`History indexing failed: ${(err as Error).message}`);
     }
   }
   ctx.history = repoHistorySummary(db, repoId);
-  progress('summarize', 'Summarizing key files', 0.25);
-  ctx.progress = (m, p) => progress('summarize', m, 0.25 + 0.35 * p);
+  progress('summarize', 'Summarizing key files', 0);
+  ctx.progress = (m, p) => progress('summarize', m, p);
   const fromModel = await summarizeFiles(ctx, { max: config.ingest.maxLlmFiles, concurrency: config.llm.concurrency, cached });
   const updSummary = db.prepare('UPDATE files SET summary=?, summary_hash=? WHERE repo_id=? AND path=?');
   db.transaction(() => {
@@ -261,26 +263,26 @@ export async function analyzeDirectory(
   const arch = heuristicArchitecture(ctx);
   const fileComp = assignFilesToComponents(ctx, arch);
 
-  progress('insights', 'Writing onboarding, security and API insights', 0.62);
-  ctx.progress = (m, p) => progress('insights', m, 0.62 + 0.25 * p);
+  progress('insights', 'Writing architecture, onboarding, security and API insights', 0);
+  ctx.progress = (m, p) => progress('insights', m, p);
   const { insights, questions } = await analyzeInsights(ctx, arch);
 
-  progress('store', 'Saving knowledge base', 0.90);
+  progress('store', 'Saving insights and initial diagram', 0);
   saveAnalysis(db, repoId, arch, insights, questions);
   const updMeta = db.prepare(`UPDATE files SET meta=json_set(coalesce(meta,'{}'), '$.component', ?) WHERE repo_id=? AND path=?`);
   db.transaction(() => {
     for (const [p, c] of fileComp) updMeta.run(c, repoId, p);
   })();
 
-  progress('flows', 'Tracing key flows for sequence diagrams', 0.92);
+  progress('flows', 'Tracing key flows for sequence diagrams', 0);
   try {
     saveFlows(db, repoId, await analyzeFlows(llm, ctx.index, warn));
   } catch (err) {
     warn(`Flow tracing failed: ${(err as Error).message}`);
   }
   onResultsReady();
-  progress('architecture', 'Synthesizing architecture in the background', 0.95);
-  ctx.progress = (m, p) => progress('architecture', m, 0.95 + 0.04 * p);
+  progress('architecture', 'Synthesizing architecture in the background', 0);
+  ctx.progress = (m, p) => progress('architecture', m, p);
   try {
     const synthesized = await analyzeArchitecture(ctx);
     // Persist only architecture: users may already be reading or changing other results.

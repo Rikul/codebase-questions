@@ -106,13 +106,18 @@ describe('background architecture synthesis', () => {
       return opts.schema.parse({ ...raw, overview: 'Background architecture complete', components: raw.components.map((c: any) => ({ ...c, id: `new-${c.id}` })), connections: [] });
     };
     const stages: string[] = [];
-    const analysis = analyzeDirectory(db, llm, null, 'background', FIXTURE, (stage) => stages.push(stage), () => undefined, null, ready);
+    const progress: number[] = [];
+    const analysis = analyzeDirectory(db, llm, null, 'background', FIXTURE, (stage, _message, fraction) => { stages.push(stage); progress.push(fraction); }, () => undefined, null, ready);
     await resultsReady;
     const count = (table: string) => (db.prepare(`SELECT count(*) n FROM ${table} WHERE repo_id='background'`).get() as { n: number }).n;
     try {
       expect(count('insights')).toBeGreaterThan(0);
       expect(count('flows')).toBeGreaterThan(0);
       expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('flows'));
+      expect(progress[stages.indexOf('store')]).toBe(0.7);
+      expect(progress[stages.indexOf('flows')]).toBe(0.8);
+      expect(progress[stages.indexOf('architecture')]).toBe(0.9);
+      expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
       // A user action performed while synthesis is running must survive its completion.
       db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background'`).run();
     } finally {

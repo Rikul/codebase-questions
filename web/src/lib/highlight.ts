@@ -1,40 +1,47 @@
-import type { HighlighterCore } from 'shiki/core';
+/**
+ * Tokenization runs off the UI thread in one long-lived worker, so shiki's highlighter and loaded
+ * grammars are reused across page turns and files. Aborted requests are skipped if not yet started.
+ */
+let worker: Worker | null = null;
+let nextId = 0;
+const pending = new Map<number, (html: string | null) => void>();
 
-let hl: Promise<HighlighterCore> | null = null;
-
-const LANG_MAP: Record<string, string> = {
-  shellscript: 'bash', docker: 'dockerfile', dotenv: 'ini', text: 'text', hcl: 'hcl', 'objective-c': 'objective-c', jsonc: 'jsonc',
-};
-
-function getHighlighter() {
-  hl ??= (async () => {
-    const { createHighlighterCore } = await import('shiki/core');
-    const { createJavaScriptRegexEngine } = await import('shiki/engine/javascript');
-    const { bundledThemes } = await import('shiki/themes');
-    return createHighlighterCore({
-      themes: [bundledThemes['github-light'](), bundledThemes['github-dark-dimmed']()],
-      langs: [],
-      engine: createJavaScriptRegexEngine(),
-    });
-  })();
-  return hl;
-}
-
-const loaded = new Set<string>();
-
-export async function highlight(code: string, lang: string | null | undefined): Promise<string | null> {
-  const id = LANG_MAP[lang ?? ''] ?? lang ?? 'text';
+function getWorker(): Worker | null {
+  if (worker) return worker;
+  if (typeof Worker === 'undefined') return null;
   try {
-    const h = await getHighlighter();
-    if (id !== 'text' && !loaded.has(id)) {
-      const { bundledLanguages } = await import('shiki/langs');
-      const loader = (bundledLanguages as Record<string, any>)[id];
-      if (!loader) return null;
-      await h.loadLanguage(loader);
-      loaded.add(id);
-    }
-    return h.codeToHtml(code, { lang: loaded.has(id) ? id : 'text', themes: { light: 'github-light', dark: 'github-dark-dimmed' }, defaultColor: false });
+    worker = new Worker(new URL('./highlight.worker.ts', import.meta.url), { type: 'module' });
   } catch {
     return null;
   }
+  worker.onmessage = (event: MessageEvent<{ id: number; html: string | null }>) => {
+    pending.get(event.data.id)?.(event.data.html);
+  };
+  worker.onerror = () => {
+    // A broken worker fails every outstanding request; the next call starts a fresh one.
+    worker?.terminate();
+    worker = null;
+    for (const resolve of [...pending.values()]) resolve(null);
+  };
+  return worker;
+}
+
+export function highlight(code: string, lang: string | null | undefined, signal: AbortSignal): Promise<string | null> {
+  return new Promise((resolve) => {
+    const w = signal.aborted ? null : getWorker();
+    if (!w) return resolve(null);
+    const id = nextId++;
+    const finish = (html: string | null) => {
+      pending.delete(id);
+      signal.removeEventListener('abort', abort);
+      resolve(html);
+    };
+    const abort = () => {
+      w.postMessage({ type: 'cancel', id });
+      finish(null);
+    };
+    pending.set(id, finish);
+    signal.addEventListener('abort', abort, { once: true });
+    w.postMessage({ type: 'highlight', id, code, lang });
+  });
 }

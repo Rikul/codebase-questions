@@ -349,8 +349,9 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
 export async function analyzeInsights(
   ctx: RepoContext,
   arch: Architecture,
+  cats: Category[] = ['architecture', 'onboarding', 'security', 'api'],
 ): Promise<{ insights: Insight[]; questions: SuggestedQuestion[] }> {
-  const cats: Category[] = ['architecture', 'onboarding', 'security', 'api'];
+  let completed = 0;
   const results = await Promise.all(
     cats.map(async (cat) => {
       const heuristic = () => heuristicInsights(ctx, cat, arch);
@@ -361,7 +362,7 @@ export async function analyzeInsights(
               ctx.llm,
               {
                 name: `insights_${cat}`,
-                maxTokens: 12_000,
+                maxTokens: 16_384,
                 system: `You are an expert engineer producing the "${CATEGORY_LABELS[cat]}" section of a codebase knowledge base. ${GUIDES[cat]} Ground every statement in the provided facts and cite files as refs (path plus line numbers when known). Be concrete and concise; prefer bullet lists and tables.`,
                 messages: [{ role: 'user', content: categoryFacts(ctx, cat, arch) }],
                 schema: InsightsOut,
@@ -369,7 +370,7 @@ export async function analyzeInsights(
               },
               ctx.warn,
             );
-      ctx.progress(`Wrote ${CATEGORY_LABELS[cat]} insights`, (cats.indexOf(cat) + 1) / cats.length);
+      ctx.progress(`Wrote ${CATEGORY_LABELS[cat]} insights`, ++completed / cats.length);
       return {
         insights: res.insights.map((i) => ({ ...i, category: cat, refs: cleanRefs(ctx, i.refs) })),
         questions: res.questions.slice(0, 8).map((question) => ({ category: cat, question })),

@@ -3,7 +3,7 @@ import remarkGfm from 'remark-gfm';
 import { useRepo } from '../lib/repoContext';
 
 const CITE_RE = /\[([^\]\s:]+?\.[\w]+|[^\]\s:]+?\/[^\]\s:]+?):(\d+)(?:-(\d+))?\]/g;
-const PATH_LIKE = /^([\w@.~-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8}(?::(\d+)(?:-(\d+))?)?$/;
+const PATH_LIKE = /^((?:[\w@.~-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:-(\d+))?)?$/;
 
 /** Turn `[path:1-2]` citations into links the renderer can make clickable. */
 function preprocess(md: string): string {
@@ -38,7 +38,7 @@ export function Markdown({ children }: { children: string }) {
             if (!className && !text.includes('\n')) {
               const m = text.match(PATH_LIKE);
               if (m && (text.includes('/') || m[2])) {
-                const [p, s, e] = text.split(/[:-]/);
+                const [, p, s, e] = m;
                 return (
                   <button className="cite" onClick={() => openCode(p, s ? Number(s) : undefined, e ? Number(e) : s ? Number(s) : undefined)}>
                     {text}

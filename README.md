@@ -133,3 +133,16 @@ clone (https only, bounded history) → scan (.gitignore, skip binaries/vendored
 ### Safety
 
 The app never executes code from analyzed repositories: it does not install dependencies or run scripts or hooks. Clones run `git` directly with a fixed argument list and no shell, accept only `https://` URLs, and do not follow symlinks. The `.git` directory is deleted after cloning. File reads are confined to the checkout.
+
+### Analysis logs
+
+Analysis writes timestamped JSON logs to stdout/stderr. In Docker, use
+`docker compose logs -f app`; with `npm run dev` or `npm start`, watch the terminal.
+Filter by `jobId` or `repoId` to follow an analysis. Stage transitions include elapsed
+milliseconds; model calls report their operation (such as `insights_security`),
+request ID, provider, configured main model, fast-model selection, duration, and
+success or fallback. Application-level retries report attempt counts and delays;
+SDK-internal retries are not individually logged. Validation failures report every
+rejected field path, issue code, and expected type or allowed enum values. Prompts,
+model responses, source contents, credential objects, and SDK error bodies are
+excluded. Existing historical warnings are not retroactively written to logs.

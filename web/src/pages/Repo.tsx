@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Category, RepoSummary } from '@cq/shared';
+import { ANALYSIS_STEPS } from '@cq/shared';
 import { api, post } from '../lib/api';
 import { CATEGORY_META } from '../lib/format';
 import type { AskIntent, RepoCtx } from '../lib/repoContext';
@@ -23,10 +24,12 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
+// The last step runs after results are shown (repo status 'enriching'), when this view is gone.
+const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'architecture');
+
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
-  const stages = ['clone', 'scan', 'parse', 'index', 'history', 'summarize', 'architecture', 'insights', 'store', 'flows'];
-  const cur = stages.indexOf(ev?.stage ?? '');
+  const cur = FOREGROUND_STEPS.findIndex((step) => step.id === (ev?.stage === 'embed' ? 'index' : ev?.stage));
   return (
     <div className="page" style={{ maxWidth: 640 }}>
       <div className="card" style={{ padding: 24 }}>
@@ -35,10 +38,11 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
-          {['Clone repository', 'Scan files', 'Parse imports, routes and signals', 'Build search index', 'Index git history', 'Summarize key files with the LLM', 'Synthesize architecture', 'Write onboarding, security and API insights', 'Save', 'Trace key flows'].map((s, i) => (
-            <li key={s} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{s}</li>
+          {FOREGROUND_STEPS.map((step, i) => (
+            <li key={step.id} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{step.label}</li>
           ))}
         </ol>
+        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the architecture diagram is then refined in the background.</p>
       </div>
     </div>
   );
@@ -61,6 +65,13 @@ export function Repo() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useJobProgress(repo?.status === 'enriching' ? repo.currentJobId : null, load);
+  useEffect(() => {
+    if (repo?.status !== 'enriching') return;
+    const timer = window.setInterval(load, 3000);
+    return () => window.clearInterval(timer);
+  }, [repo?.status, load]);
 
   const setTab = useCallback((t: TabId) => setParams((p) => { p.set('tab', t); return p; }, { replace: true }), [setParams]);
   const ctx = useMemo<RepoCtx | null>(
@@ -113,7 +124,7 @@ export function Repo() {
           </div>
           <button
             className="btn sm"
-            disabled={busy || !repo.url.startsWith('https://')}
+            disabled={busy || repo.status === 'enriching' || !repo.url.startsWith('https://')}
             onClick={async () => {
               await post(`/repos/${repo.id}/reanalyze`);
               load();
@@ -127,8 +138,14 @@ export function Repo() {
           <Progress repo={repo} onDone={load} />
         ) : (
           <>
+            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis is running in the background; the diagram will update automatically.</div>}
             {repo.status === 'failed' && <div className="error-box" style={{ margin: 12 }}>Analysis failed: {repo.error}</div>}
-            {repo.status === 'ready' && repo.error && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>⚠ {repo.error.split('\n')[0]}</div>}
+            {repo.status === 'ready' && repo.error && (
+              <details className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>
+                <summary>⚠ Analysis completed with warnings — show details</summary>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: 8 }}>{repo.error}</div>
+              </details>
+            )}
             {repo.status === 'imported' && !repo.hasSource && <div className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>Imported without source code. Search uses file summaries, and Re-analyze will clone the repository again.</div>}
             <nav className="tabs">
               {TABS.map((t) => (

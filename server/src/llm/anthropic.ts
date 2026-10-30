@@ -41,7 +41,7 @@ export class AnthropicProvider implements LLMProvider {
     const res = await withRetry(() =>
       this.client.messages.create({
         model: this.pick(opts.fast),
-        max_tokens: opts.maxTokens ?? 8192,
+        max_tokens: opts.maxTokens ?? 16_384,
         system: opts.system,
         messages: opts.messages,
         tools: [
@@ -96,7 +96,7 @@ export class AnthropicProvider implements LLMProvider {
       let turnText = '';
       const stream = this.client.messages.stream({
         model: this.pick(opts.fast),
-        max_tokens: opts.maxTokens ?? 8192,
+        max_tokens: opts.maxTokens ?? 16_384,
         system: opts.system,
         messages,
         tools,

@@ -285,7 +285,7 @@ export async function analyzeArchitecture(ctx: RepoContext): Promise<Architectur
     ctx.llm,
     {
       name: 'architecture',
-      maxTokens: 12_000,
+      maxTokens: 16_384,
       system:
         'You are a principal software architect. From the static-analysis facts provided, produce an accurate component-level architecture of the repository for an interactive diagram. ' +
         'Group modules into top-level components by responsibility, not just by folder. Include external systems the code talks to (databases, caches, queues, third-party APIs, the browser/user if relevant) as components with empty paths. ' +

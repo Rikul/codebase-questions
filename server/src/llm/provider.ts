@@ -1,3 +1,4 @@
+import { log, errorDetails } from '../logging/index.js';
 import type { z } from 'zod';
 import type { AgentOptions, AgentResult } from './agent.js';
 
@@ -54,6 +55,7 @@ export async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<
       const retryable = status === 429 || status === 408 || status === 409 || (status >= 500 && status < 600) || err?.code === 'ECONNRESET';
       if (!retryable || i === attempts - 1) throw err;
       const delay = Math.min(30_000, 1000 * 2 ** i) + Math.random() * 500;
+      log('warn', 'llm.request.retry', { attempt: i + 1, maxAttempts: attempts, delayMs: Math.round(delay), ...errorDetails(err) });
       await new Promise((r) => setTimeout(r, delay));
     }
   }

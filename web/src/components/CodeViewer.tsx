@@ -35,11 +35,18 @@ function age(date: string) {
   return `${Math.round(days / 365)}y`;
 }
 
+const PAGE_LINES = 250;
+const HIGHLIGHT_CHARS = 50_000;
 const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+/**
+ * Above this much highlighted HTML per line, identifiers are left unlinked: walking and rebuilding
+ * the DOM for very dense lines (minified code, long generated strings) stalls rendering.
+ */
+const IDENT_LINK_MAX_HTML = 20_000;
 
 /** Wrap known identifiers inside highlighted line HTML with clickable spans. */
 function markIdentifiers(html: string, idents: Set<string>): string {
-  if (!idents.size || !/[A-Za-z_$]/.test(html)) return html;
+  if (html.length > IDENT_LINK_MAX_HTML || !idents.size || !/[A-Za-z_$]/.test(html)) return html;
   const tpl = document.createElement('template');
   tpl.innerHTML = html;
   const walker = document.createTreeWalker(tpl.content, NodeFilter.SHOW_TEXT);
@@ -81,33 +88,40 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
     return { starts: m, min: Math.min(...times), max: Math.max(...times) };
   }, [blame]);
   const rawLines = useMemo(() => code.split('\n'), [code]);
+  const paged = rawLines.length > 500 || code.length > HIGHLIGHT_CHARS;
+  const focus = highlightStart ?? activeLine ?? firstLine;
+  const initialPage = Math.floor(Math.max(0, Math.min(rawLines.length - 1, focus - firstLine)) / PAGE_LINES);
+  const [page, setPage] = useState(initialPage);
+  useEffect(() => { setPage(initialPage); }, [code, firstLine, focus, initialPage]);
+  const pageStart = paged ? Math.min(page, Math.floor((rawLines.length - 1) / PAGE_LINES)) * PAGE_LINES : 0;
+  const visibleLines = useMemo(() => paged ? rawLines.slice(pageStart, pageStart + PAGE_LINES) : rawLines, [rawLines, paged, pageStart]);
+  const visibleCode = useMemo(() => visibleLines.join('\n'), [visibleLines]);
+  const displayFirstLine = firstLine + pageStart;
   const [selection, setSelection] = useState<{ text: string; startLine: number; endLine: number; x: number; y: number } | null>(null);
-  const plain = useMemo(() => code.split('\n').map(escapeHtml), [code]);
-  const [lines, setLines] = useState<string[]>(plain);
+  const plain = useMemo(() => visibleLines.map(escapeHtml), [visibleLines]);
+  const [highlighted, setHighlighted] = useState<{ code: string; lang: Props['lang']; lines: string[] } | null>(null);
+  const lines = highlighted?.code === visibleCode && highlighted.lang === lang ? highlighted.lines : plain;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setLines(plain);
-    let cancelled = false;
-    if (code.length > 400_000) return;
-    highlight(code, lang).then((html) => {
-      if (cancelled || !html) return;
+    const controller = new AbortController();
+    if (visibleCode.length > HIGHLIGHT_CHARS) return;
+    highlight(visibleCode, lang, controller.signal).then((html) => {
+      if (controller.signal.aborted || !html) return;
       const doc = new DOMParser().parseFromString(html, 'text/html');
       const ls = [...doc.querySelectorAll('.line')].map((l) => l.innerHTML);
-      if (ls.length) setLines(ls);
+      if (ls.length === visibleLines.length) setHighlighted({ code: visibleCode, lang, lines: ls });
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [code, lang, plain]);
+    return () => controller.abort();
+  }, [visibleCode, lang, visibleLines.length]);
 
   useEffect(() => {
     if (!highlightStart || !scrollRef.current) return;
     const row = scrollRef.current.querySelector<HTMLTableRowElement>(`tr[data-ln="${highlightStart}"]`);
     row?.scrollIntoView({ block: 'center' });
-  }, [highlightStart, lines]);
+  }, [highlightStart, pageStart, code]);
 
-  const rendered = useMemo(() => (identifiers && onIdentifierClick ? lines.map((l) => markIdentifiers(l, identifiers)) : lines), [lines, identifiers, onIdentifierClick]);
+  const rendered = useMemo(() => (identifiers && Boolean(onIdentifierClick) ? lines.map((l) => markIdentifiers(l, identifiers)) : lines), [lines, identifiers, Boolean(onIdentifierClick)]);
 
   const lineOfNode = (n: Node | null): number | null => {
     const el = n instanceof Element ? n : n?.parentElement;
@@ -149,6 +163,16 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
           {actions}
         </div>
       )}
+      {paged && (
+        <div className="head" aria-label="File sections">
+          <button className="btn sm" disabled={pageStart === 0} onClick={() => { setPage(Math.max(0, page - 1)); setSelection(null); }}>Previous</button>
+          <span className="small muted grow">Lines {displayFirstLine}–{displayFirstLine + visibleLines.length - 1} of {firstLine + rawLines.length - 1}</span>
+          <label className="small muted">Section <select aria-label="File section" value={pageStart / PAGE_LINES} onChange={(e) => { setPage(Number(e.target.value)); setSelection(null); }}>
+            {Array.from({ length: Math.ceil(rawLines.length / PAGE_LINES) }, (_, i) => <option key={i} value={i}>{firstLine + i * PAGE_LINES}–{Math.min(firstLine + (i + 1) * PAGE_LINES - 1, firstLine + rawLines.length - 1)}</option>)}
+          </select></label>
+          <button className="btn sm" disabled={pageStart + PAGE_LINES >= rawLines.length} onClick={() => { setPage(page + 1); setSelection(null); }}>Next</button>
+        </div>
+      )}
       <div
         className={`code-scroll shiki ${full ? 'full' : ''} ${onIdentifierClick ? 'clickable' : ''}`}
         ref={scrollRef}
@@ -174,7 +198,7 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
         <table className="code-table">
           <tbody>
             {rendered.map((l, i) => {
-              const n = firstLine + i;
+              const n = displayFirstLine + i;
               return (
                 <tr
                   key={i}
@@ -183,7 +207,7 @@ export function CodeViewer({ code, lang, firstLine = 1, highlightStart, highligh
                     [
                       n >= hs && n <= he ? 'hl' : '',
                       activeLine === n ? 'active' : '',
-                      diff ? (rawLines[i]?.startsWith('+') && !rawLines[i]?.startsWith('+++') ? 'add' : rawLines[i]?.startsWith('-') && !rawLines[i]?.startsWith('---') ? 'del' : rawLines[i]?.startsWith('@@') ? 'hunk' : '') : '',
+                      diff ? (visibleLines[i]?.startsWith('+') && !visibleLines[i]?.startsWith('+++') ? 'add' : visibleLines[i]?.startsWith('-') && !visibleLines[i]?.startsWith('---') ? 'del' : visibleLines[i]?.startsWith('@@') ? 'hunk' : '') : '',
                     ]
                       .join(' ')
                       .trim() || undefined

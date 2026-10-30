@@ -17,11 +17,17 @@ export function useJobProgress(jobId: string | null, onDone?: () => void) {
   const done = useRef(onDone);
   done.current = onDone;
   useEffect(() => {
+    setEv(null);
     if (!jobId) return;
     const es = new EventSource(`/api/jobs/${jobId}/events`);
+    let stage: string | null = null;
     es.onmessage = (m) => {
       const e = JSON.parse(m.data) as JobEvent;
       setEv(e);
+      // Results become readable when the job enters the background architecture stage; refresh once.
+      const entered = e.stage !== stage;
+      stage = e.stage;
+      if (entered && e.stage === 'architecture' && !e.done) done.current?.();
       if (e.done) {
         es.close();
         done.current?.();
@@ -34,7 +40,7 @@ export function useJobProgress(jobId: string | null, onDone?: () => void) {
 }
 
 function RepoRow({ repo, onChange }: { repo: RepoSummary; onChange: () => void }) {
-  const active = repo.status === 'running' || repo.status === 'queued';
+  const active = repo.status === 'running' || repo.status === 'queued' || repo.status === 'enriching';
   const ev = useJobProgress(active ? repo.currentJobId : null, onChange);
   return (
     <div className="card repo-item">

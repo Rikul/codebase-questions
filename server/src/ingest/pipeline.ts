@@ -253,8 +253,13 @@ export async function analyzeDirectory(
 
   progress('architecture', 'Synthesizing architecture', 0.62);
   ctx.progress = (m, p) => progress('architecture', m, 0.62 + 0.1 * p);
+  let t = Date.now();
   const arch = await analyzeArchitecture(ctx);
+  const synthSec = ((Date.now() - t) / 1000).toFixed(1);
+  progress('architecture', `Assigning files to components (synthesis took ${synthSec}s)`, 0.72);
+  t = Date.now();
   const fileComp = assignFilesToComponents(ctx, arch);
+  console.log(`[${repoId}] architecture: synthesis ${synthSec}s, file assignment ${((Date.now() - t) / 1000).toFixed(1)}s`);
 
   progress('insights', 'Writing onboarding, security and API insights', 0.75);
   ctx.progress = (m, p) => progress('insights', m, 0.75 + 0.22 * p);

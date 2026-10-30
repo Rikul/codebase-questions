@@ -20,7 +20,7 @@ function flowSystem(repo: string) {
   return `You are tracing runtime flows through ${repo} to draw sequence diagrams. ${AGENT_GUIDANCE}
 
 For each flow: start at its trigger (HTTP route handler, CLI command, job consumer, startup), then follow the calls with read_file, find_definition and symbol_calls until it reaches persistence, an external system, or returns. Use architecture component ids for participants where they apply (get_architecture), external systems as their own participants, and "client"/"user" for the outside caller.
-Every step must have a ref (path + line) you actually read. Include returns only where they carry meaningful data. Keep each flow to 4-14 steps.`;
+Every step must have a ref (path + line) you actually read. Include returns only where they carry meaningful data.`;
 }
 
 /** Participant for a file: its architecture component when known, else the file itself. */

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { log, errorDetails } from '../logging/index.js';
 import { ZodError } from 'zod';
 import { config } from '../config.js';
 import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic.js';
@@ -49,9 +51,15 @@ export async function jsonWithFallback<T>(
   opts: JSONOptions<T>,
   onWarn?: (msg: string) => void,
 ): Promise<T> {
+  const started = Date.now();
+  const fields = { requestId: randomUUID(), operation: opts.name, provider: llm.name, mainModel: llm.model, fast: Boolean(opts.fast) };
+  log('info', 'llm.request.started', fields);
   try {
-    return await llm.completeJSON(opts);
+    const result = await llm.completeJSON(opts);
+    log('info', 'llm.request.completed', { ...fields, durationMs: Date.now() - started });
+    return result;
   } catch (err) {
+    log(opts.heuristic ? 'warn' : 'error', 'llm.request.failed', { ...fields, durationMs: Date.now() - started, fallback: Boolean(opts.heuristic), ...errorDetails(err) });
     if (!opts.heuristic) throw err;
     onWarn?.(`${opts.name}: model call failed (${modelErrorMessage(err)}); using static analysis instead`);
     return opts.schema.parse(opts.heuristic());
@@ -60,11 +68,16 @@ export async function jsonWithFallback<T>(
 
 /** Agent run that falls back to the scripted (static) investigation if the model run fails. */
 export async function agentWithFallback<T>(llm: LLMProvider, opts: AgentOptions<T>, onWarn?: (msg: string) => void): Promise<AgentResult<T>> {
+  const started = Date.now();
+  const fields = { requestId: randomUUID(), operation: opts.final?.name ?? 'agent', provider: llm.name, mainModel: llm.model, fast: Boolean(opts.fast) };
+  log('info', 'llm.agent.started', fields);
   try {
     const r = await llm.runAgent(opts);
     if (opts.final && r.final === undefined) throw new Error('model did not submit a final answer');
+    log('info', 'llm.agent.completed', { ...fields, durationMs: Date.now() - started, steps: r.steps, toolCalls: r.toolCalls.length });
     return r;
   } catch (err) {
+    log('warn', 'llm.agent.failed', { ...fields, durationMs: Date.now() - started, fallback: Boolean(opts.scripted && llm.name !== 'mock'), ...errorDetails(err) });
     if (!opts.scripted || llm.name === 'mock') throw err;
     onWarn?.(`agent run failed (${modelErrorMessage(err)}); using static analysis instead`);
     return new MockProvider().runAgent(opts);

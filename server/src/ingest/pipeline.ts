@@ -1,3 +1,4 @@
+import { log, errorDetails, withJobLogs } from '../logging/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -94,9 +95,15 @@ async function drain() {
 function emitter(db: DB, jobId: string) {
   let last = 0;
   let lastStage = '';
+  let stageStarted = Date.now();
   return (stage: string, message: string, progress: number, extra: Partial<JobEvent> = {}) => {
     const ev: JobEvent = { jobId, stage, message, progress: Math.max(0, Math.min(1, progress)), ...extra };
     const now = Date.now();
+    if (stage !== lastStage) {
+      if (lastStage) log('info', 'analysis.stage.finished', { stage: lastStage, durationMs: now - stageStarted, outcome: stage === 'failed' ? 'failed' : 'completed' });
+      log('info', 'analysis.stage.started', { stage, progress: ev.progress });
+      stageStarted = now;
+    }
     if (stage !== lastStage || now - last > 250 || extra.done || extra.error) {
       lastStage = stage;
       last = now;
@@ -107,6 +114,12 @@ function emitter(db: DB, jobId: string) {
 }
 
 export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider | null, jobId: string, repoId: string) {
+  return withJobLogs(jobId, repoId, () => executeJob(db, llm, embeddings, jobId, repoId));
+}
+
+async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider | null, jobId: string, repoId: string) {
+  const started = Date.now();
+  log('info', 'analysis.job.started', { provider: llm.name, model: llm.model });
   const emit = emitter(db, jobId);
   const repo = db.prepare('SELECT * FROM repos WHERE id=?').get(repoId) as any;
   if (!repo) return;
@@ -118,17 +131,23 @@ export async function runJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProv
     emit('clone', `Cloning ${repo.url}`, analysisProgress('clone'));
     const { commit, history, warnings: cloneWarnings } = await cloneRepo(parseRepoUrl(repo.url), dir);
     warnings.push(...cloneWarnings);
+    if (cloneWarnings.length) log('warn', 'analysis.clone.warnings', { count: cloneWarnings.length });
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
-    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => warnings.push(w), history, () => {
+    await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => {
+      warnings.push(w);
+      // Detailed LLM failures are logged at their source; avoid logging raw response data here.
+      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Flow tracing failed|Architecture synthesis failed)/.exec(w)?.[0] ?? 'analysis warning' });
+    }, history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
       emit('architecture', 'Results available; synthesizing architecture in the background', analysisProgress('architecture'));
     });
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
+    log('info', 'analysis.job.completed', { durationMs: Date.now() - started, warningCount: warnings.length });
     emit('done', warnings.length ? `Ready (with ${warnings.length} warning(s))` : 'Ready', 1, { done: true });
   } catch (err) {
     const msg = (err as Error).message || String(err);
-    console.error(`[job ${jobId}]`, err);
+    log('error', 'analysis.job.failed', { durationMs: Date.now() - started, ...errorDetails(err) });
     db.prepare(`UPDATE repos SET status='failed', error=?, updated_at=datetime('now') WHERE id=?`).run(msg, repoId);
     db.prepare(`UPDATE jobs SET status='failed', error=? WHERE id=?`).run(msg, jobId);
     emit('failed', msg, 1, { done: true, error: msg });
@@ -233,6 +252,7 @@ export async function analyzeDirectory(
         progress('embed', `Embedded ${Math.min(i + 256, chunkIds.length)}/${chunkIds.length} chunks`, 0.5 + 0.5 * (Math.min(i + 256, chunkIds.length) / chunkIds.length));
       }
     } catch (err) {
+      log('warn', 'analysis.embeddings.failed', errorDetails(err));
       warn(`Embeddings failed (${(err as Error).message}); keyword search only`);
     }
   }
@@ -245,6 +265,7 @@ export async function analyzeDirectory(
       storeFileHistorySummaries(db, repoId);
       progress('history', `Indexed ${commits} commits`, 1);
     } catch (err) {
+      log('warn', 'analysis.history.failed', errorDetails(err));
       warn(`History indexing failed: ${(err as Error).message}`);
     }
   }
@@ -278,6 +299,7 @@ export async function analyzeDirectory(
   try {
     saveFlows(db, repoId, await analyzeFlows(llm, ctx.index, warn));
   } catch (err) {
+    log('warn', 'analysis.flows.failed', errorDetails(err));
     warn(`Flow tracing failed: ${(err as Error).message}`);
   }
   onResultsReady();
@@ -303,6 +325,7 @@ export async function analyzeDirectory(
     })();
     return { architecture: synthesized };
   } catch (err) {
+    log('warn', 'analysis.architecture.failed', errorDetails(err));
     warn(`Architecture synthesis failed: ${(err as Error).message}; keeping static architecture`);
     return { architecture: arch };
   }

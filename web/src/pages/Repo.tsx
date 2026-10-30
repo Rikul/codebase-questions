@@ -8,9 +8,8 @@ import type { AskIntent, RepoCtx } from '../lib/repoContext';
 import { RepoContext } from '../lib/repoContext';
 import { ArchDiagram } from '../components/ArchDiagram';
 import { Chat } from '../components/Chat';
-import { CodeModal, type CodeTarget } from '../components/CodeModal';
 import { CommitModal } from '../components/CommitModal';
-import { FilesView } from '../components/FilesView';
+import { FilesView, type FileTarget } from '../components/FilesView';
 import { InsightsView } from '../components/InsightsView';
 import { useJobProgress } from './Home';
 
@@ -54,10 +53,8 @@ export function Repo() {
   const tab = (params.get('tab') as TabId) || 'architecture';
   const [repo, setRepo] = useState<RepoSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [code, setCode] = useState<CodeTarget | null>(null);
   const [intent, setIntent] = useState<AskIntent | null>(null);
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [fileSymbol, setFileSymbol] = useState<{ name?: string; line?: number } | null>(null);
+  const [fileTarget, setFileTarget] = useState<FileTarget | null>(null);
   const [menu, setMenu] = useState(false);
   const [commit, setCommit] = useState<{ sha: string; path?: string } | null>(null);
 
@@ -78,16 +75,18 @@ export function Repo() {
     () =>
       repo && {
         repo,
-        openCode: (path, startLine, endLine) => setCode({ path, startLine, endLine }),
+        // File links open in the Files tab (scrolled to and highlighting the cited lines).
+        openCode: (path, startLine, endLine) => {
+          setFileTarget({ path, startLine, endLine });
+          setTab('files');
+        },
         askAbout: (i) => {
           setIntent(i);
           setTab('ask');
         },
         openCommit: (sha, path) => setCommit({ sha, path }),
         openFile: (p, symbol) => {
-          setCode(null);
-          setFilePath(p);
-          setFileSymbol(symbol ?? null);
+          setFileTarget({ path: p, symbol });
           setTab('files');
         },
       },
@@ -160,11 +159,10 @@ export function Repo() {
                 </div>
               )}
               {tab === 'ask' && <Chat intent={intent} onIntentConsumed={() => setIntent(null)} />}
-              {tab === 'files' && <FilesView initialPath={filePath} initialSymbol={fileSymbol} />}
+              {tab === 'files' && <FilesView target={fileTarget} />}
             </div>
           </>
         )}
-        {code && <CodeModal repoId={repo.id} target={code} onClose={() => setCode(null)} onOpenFile={(p, sym) => ctx.openFile(p, sym)} />}
         {commit && <CommitModal sha={commit.sha} path={commit.path} onClose={() => setCommit(null)} />}
       </div>
     </RepoContext.Provider>

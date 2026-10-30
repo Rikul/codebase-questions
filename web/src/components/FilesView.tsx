@@ -29,14 +29,23 @@ function TreeNode({ node, depth, selected, onSelect, open, toggle }: { node: Fil
   );
 }
 
-export function FilesView({ initialPath, initialSymbol }: { initialPath: string | null; initialSymbol?: { name?: string; line?: number } | null }) {
+/** A file to show, optionally explaining a symbol or highlighting a line range. A new object re-applies it. */
+export interface FileTarget {
+  path: string;
+  symbol?: { name?: string; line?: number };
+  startLine?: number;
+  endLine?: number;
+}
+
+export function FilesView({ target }: { target: FileTarget | null }) {
   const { repo, openCode } = useRepo();
   const [tree, setTree] = useState<FileNode | null>(null);
-  const [path, setPath] = useState<string | null>(initialPath);
+  const [path, setPath] = useState<string | null>(target?.path ?? null);
+  const [range, setRange] = useState<{ path: string; start: number; end: number } | null>(null);
   const [file, setFile] = useState<any>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [idents, setIdents] = useState<Set<string>>(new Set());
-  const [subject, setSubject] = useState<ExplainSubject | null>(initialPath ? { path: initialPath, symbol: initialSymbol ?? undefined } : null);
+  const [subject, setSubject] = useState<ExplainSubject | null>(target ? { path: target.path, symbol: target.symbol } : null);
   const [showExplain, setShowExplain] = useState(true);
   const [blameOn, setBlameOn] = useState(false);
   const [blameData, setBlameData] = useState<any[] | null>(null);
@@ -65,10 +74,13 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
     });
   }, [repo.id]);
   useEffect(() => {
-    if (!initialPath) return;
-    setPath(initialPath);
-    setSubject({ path: initialPath, symbol: initialSymbol ?? undefined });
-  }, [initialPath, initialSymbol]);
+    if (!target) return;
+    setPath(target.path);
+    // Keep the current explanation when a plain link points into the file it already explains.
+    setSubject((s) => (target.symbol || s?.path !== target.path ? { path: target.path, symbol: target.symbol } : s));
+    setShowExplain(true);
+    setRange(target.startLine ? { path: target.path, start: target.startLine, end: target.endLine ?? target.startLine } : null);
+  }, [target]);
   useEffect(() => {
     if (!path) return;
     setFile(null);
@@ -100,6 +112,7 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
   };
   const toggle = (p: string) => setOpen((o) => { const n = new Set(o); n.has(p) ? n.delete(p) : n.add(p); return n; });
   const signals = useMemo(() => ((file?.meta?.security ?? []) as { kind: string; line: number }[]).filter((s) => s.kind !== 'auth'), [file]);
+  const hl = range && range.path === path ? range : null;
   const activeLine = subject?.path === path ? subject?.symbol?.line ?? subject?.snippet?.startLine ?? null : null;
 
   return (
@@ -148,6 +161,8 @@ export function FilesView({ initialPath, initialSymbol }: { initialPath: string 
               title={`${file.content.split('\n').length} lines · ${file.lang ?? 'text'}`}
               identifiers={idents}
               activeLine={activeLine}
+              highlightStart={hl?.start ?? null}
+              highlightEnd={hl?.end ?? null}
               blame={blameOn ? blameData : null}
               onBlameClick={(sha) => openCommit(sha, file.path)}
               onIdentifierClick={(name, line) => onSubject({ path: file.path, symbol: { name, line } })}

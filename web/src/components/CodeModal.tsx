@@ -15,12 +15,21 @@ export function CodeModal({ repoId, target, onClose, onOpenFile }: { repoId: str
   const [subject, setSubject] = useState<ExplainSubject | null>(null);
   const [idents, setIdents] = useState<Set<string>>(new Set());
   useEffect(() => {
-    api<string[]>(`/repos/${repoId}/identifiers?path=${encodeURIComponent(target.path)}`).then((l) => setIdents(new Set(l)), () => undefined);
+    const controller = new AbortController();
+    setIdents(new Set());
+    api<string[]>(`/repos/${repoId}/identifiers?path=${encodeURIComponent(target.path)}`, { signal: controller.signal }).then((l) => { if (!controller.signal.aborted) setIdents(new Set(l)); }, () => undefined);
+    return () => controller.abort();
   }, [repoId, target.path]);
   useEffect(() => {
     setFile(null);
     setError(null);
-    api<any>(`/repos/${repoId}/files?path=${encodeURIComponent(target.path)}`).then(setFile, (e) => setError(e.message));
+    setSubject(null);
+    const controller = new AbortController();
+    api<any>(`/repos/${repoId}/files?path=${encodeURIComponent(target.path)}`, { signal: controller.signal }).then(
+      (result) => { if (!controller.signal.aborted) setFile(result); },
+      (e) => { if (!controller.signal.aborted) setError(e.message); },
+    );
+    return () => controller.abort();
   }, [repoId, target.path]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -50,6 +59,7 @@ export function CodeModal({ repoId, target, onClose, onOpenFile }: { repoId: str
             {!file && !error && <div className="empty"><span className="spinner" /></div>}
             {file && (
               <CodeViewer
+                key={target.path}
                 code={file.content}
                 lang={file.lang}
                 highlightStart={target.startLine}

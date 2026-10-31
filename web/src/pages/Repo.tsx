@@ -157,7 +157,7 @@ export function Repo() {
               await post(`/repos/${repo.id}/reanalyze`);
               load();
             }}
-            title="Re-clone and rebuild the knowledge base (unchanged file summaries are reused)"
+            title="Fetch the latest commits and rebuild the knowledge base (clones only if the checkout is missing; unchanged file summaries are reused)"
           >
             Re-analyze
           </button>

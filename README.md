@@ -114,7 +114,7 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## How it works
 
 ```
-clone (https only, bounded history) → scan (.gitignore, skip binaries/vendored)
+clone, or fetch into the existing checkout on re-analysis (https only, bounded history) → scan (.gitignore, skip binaries/vendored)
   → parse (imports, symbols, routes, env vars, security + infra signals, manifests)
   → import graph → module grouping → chunk + FTS5 index (+ embeddings)
   → git history index (commits, per-file changes, renames)

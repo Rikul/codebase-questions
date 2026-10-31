@@ -98,6 +98,55 @@ export async function cloneRepo(p: ParsedRepoUrl, dest: string): Promise<{ commi
   return prepareCheckout(dest, p.url, depth, config.ingest.githubToken);
 }
 
+export type CheckoutResult = { commit: string; history: HistoryInfo | null; warnings: string[] };
+
+/**
+ * Bring an existing checkout up to date by fetching the branch and resetting to it, instead of
+ * cloning again. Returns null when there is no usable checkout (never cloned, history disabled so
+ * .git was removed, or a different repository); throws if git fails. The fetch URL (which may hold
+ * a token) is passed on the command line only, never stored; prepareCheckout then scrubs and checks
+ * the checkout exactly as after a clone.
+ */
+export async function updateCheckout(dest: string, cleanUrl: string, fetchUrl: string, branch: string | undefined, depth: number, secret?: string): Promise<CheckoutResult | null> {
+  if (depth < 0 || !fs.existsSync(path.join(dest, '.git'))) return null;
+  const env = gitEnv();
+  // Fixed argument lists, no shell, no hooks, no symlinks, no background gc.
+  const g = (args: string[]) =>
+    run('git', ['-C', dest, '-c', 'core.symlinks=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { env, timeout: config.ingest.cloneTimeoutMs, maxBuffer: 10 * 1024 * 1024 });
+  const remote = (await g(['config', '--get', 'remote.origin.url']).catch(() => ({ stdout: '' }))).stdout.trim();
+  if (remote !== cleanUrl) return null;
+  try {
+    const fetch = ['fetch', '--quiet', '--no-tags'];
+    if (depth > 0) fetch.push('--depth', String(depth));
+    else if ((await g(['rev-parse', '--is-shallow-repository'])).stdout.trim() === 'true') fetch.push('--unshallow');
+    fetch.push('--', fetchUrl, branch ?? 'HEAD');
+    await g(fetch);
+    await g(['reset', '--quiet', '--hard', 'FETCH_HEAD']);
+    // The checkout is never edited, but make sure it matches the fetched commit exactly.
+    await g(['clean', '-ffdxq']);
+    // Drop objects a shallow fetch no longer needs, so .git does not grow with every update.
+    await g(['gc', '--quiet', '--prune=now']).catch(() => undefined);
+  } catch (err) {
+    const e = err as Error & { stderr?: string };
+    const msg = String(e.stderr || e.message).replaceAll(secret || '\u0000', '***');
+    throw new Error(`git fetch failed: ${msg.trim().split('\n').slice(-3).join(' ')}`);
+  }
+  return prepareCheckout(dest, cleanUrl, depth, secret);
+}
+
+/** Update the existing checkout if there is one, otherwise (or if updating fails) clone from scratch. */
+export async function syncRepo(p: ParsedRepoUrl, dest: string): Promise<CheckoutResult & { updated: boolean }> {
+  const warnings: string[] = [];
+  try {
+    const r = await updateCheckout(dest, p.url, authedUrl(p), p.branch, config.ingest.historyDepth, config.ingest.githubToken);
+    if (r) return { ...r, updated: true };
+  } catch (err) {
+    warnings.push(`Could not update the existing checkout (${(err as Error).message}); cloned it again instead.`);
+  }
+  const r = await cloneRepo(p, dest);
+  return { ...r, warnings: [...warnings, ...r.warnings], updated: false };
+}
+
 /**
  * Post-clone setup: scrub credentials and record history (or drop .git), then enforce size limits.
  * On any failure the checkout is deleted, so a token can never be left on disk.

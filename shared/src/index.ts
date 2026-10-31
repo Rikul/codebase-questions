@@ -387,7 +387,7 @@ export type ProjectExport = z.infer<typeof ExportSchema>;
 
 /** Ordered analysis stages shared by job reporting and the progress UI. */
 export const ANALYSIS_STEPS = [
-  { id: 'clone', label: 'Clone repository' },
+  { id: 'clone', label: 'Clone or update repository' },
   { id: 'scan', label: 'Scan files' },
   { id: 'parse', label: 'Parse imports, routes and signals' },
   { id: 'index', label: 'Build search index' },

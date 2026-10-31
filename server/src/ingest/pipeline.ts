@@ -1,6 +1,7 @@
 import { log, errorDetails, withJobLogs } from '../logging/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Architecture, JobEvent, RepoSummary } from '@cq/shared';
 import { analysisProgress, defaultView } from '@cq/shared';
@@ -15,7 +16,7 @@ import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
 import { chunkFile } from './chunk.js';
-import { cloneRepo, parseRepoUrl } from './clone.js';
+import { parseRepoUrl, syncRepo } from './clone.js';
 import { buildImportGraph, centrality, groupModules, moduleEdges, moduleOf } from './graph.js';
 import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
 import type { FileFacts } from './parse.js';
@@ -129,8 +130,11 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   const warnings: string[] = [];
   try {
     const dir = repoDir(repoId);
-    emit('clone', `Cloning ${repo.url}`, analysisProgress('clone'));
-    const { commit, history, warnings: cloneWarnings } = await cloneRepo(parseRepoUrl(repo.url), dir);
+    // Re-analysis fetches into the existing checkout when there is one; otherwise it clones.
+    const hasCheckout = fs.existsSync(path.join(dir, '.git'));
+    emit('clone', `${hasCheckout ? 'Updating' : 'Cloning'} ${repo.url}`, analysisProgress('clone'));
+    const { commit, history, warnings: cloneWarnings, updated } = await syncRepo(parseRepoUrl(repo.url), dir);
+    log('info', 'analysis.checkout.ready', { updated });
     warnings.push(...cloneWarnings);
     if (cloneWarnings.length) log('warn', 'analysis.clone.warnings', { count: cloneWarnings.length });
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);

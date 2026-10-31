@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { DiagramEvent, ExplainEvent, FlowEvent } from '@cq/shared';
+import type { DiagramEvent, ExplainEvent } from '@cq/shared';
 import { openDb } from '../src/db/index.js';
 import { analyzeDirectory } from '../src/ingest/pipeline.js';
 import { MockProvider } from '../src/llm/mock.js';
@@ -9,7 +9,6 @@ import { OpenAIProvider } from '../src/llm/openai.js';
 import { explain } from '../src/agent/explain.js';
 import { RepoIndex, repoTools } from '../src/agent/tools.js';
 import { answerOnDiagram } from '../src/agent/diagram.js';
-import { listFlows, traceFlow } from '../src/analyze/flows.js';
 import { getArchitecture } from '../src/routes/queries.js';
 import { startFakeApi } from './fakeApi.js';
 
@@ -115,22 +114,7 @@ describe('agent features', () => {
     fake.anthropic.length = 0;
   });
 
-  it('traces flows at ingest (offline) through route → service → db', () => {
-    const flows = listFlows(db, 'r');
-    const f = flows.find((x) => x.title === 'Handle GET /users/:id')!;
-    expect(f).toBeTruthy();
-    const labels = f.steps.map((s) => s.label);
-    expect(labels[0]).toBe('GET /users/:id');
-    expect(labels).toEqual(expect.arrayContaining(['getUser()', 'pool.query()']));
-    const ids = new Set(f.participants.map((p) => p.id));
-    for (const s of f.steps) expect(ids.has(s.from) && ids.has(s.to)).toBe(true);
-    expect(f.participants.some((p) => p.componentId === 'postgresql')).toBe(true);
-  });
-
-  it('traces a flow on demand and answers on the diagram with valid ids only', async () => {
-    const fev: FlowEvent[] = [];
-    const flow = await traceFlow(db, mock, null, 'r', 'what happens when searching users', (e) => fev.push(e));
-    expect(flow?.steps.length).toBeGreaterThan(2);
+  it('answers on the diagram with valid ids only', async () => {
     const dev: DiagramEvent[] = [];
     await answerOnDiagram(db, mock, null, 'r', 'How is a user fetched by id?', false, (e) => dev.push(e));
     const res = dev.find((e) => e.type === 'result') as Extract<DiagramEvent, { type: 'result' }>;

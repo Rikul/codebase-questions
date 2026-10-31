@@ -1,7 +1,6 @@
 import { log, errorDetails, withJobLogs } from '../logging/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Architecture, JobEvent, RepoSummary } from '@cq/shared';
 import { analysisProgress } from '@cq/shared';
@@ -22,8 +21,6 @@ import { buildRefs } from './refs.js';
 import type { HistoryInfo } from '../history/git.js';
 import { indexHistory, repoHistorySummary, storeFileHistorySummaries } from '../history/index.js';
 import { repoDir } from '../paths.js';
-import { analyzeFlows, saveFlows } from '../analyze/flows.js';
-import { RepoIndex } from '../agent/tools.js';
 import { scanRepo } from './scan.js';
 
 export const jobEvents = new EventEmitter();
@@ -138,7 +135,7 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => {
       warnings.push(w);
       // Detailed LLM failures are logged at their source; avoid logging raw response data here.
-      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Flow tracing failed|Architecture synthesis failed)/.exec(w)?.[0] ?? 'analysis warning' });
+      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Architecture synthesis failed)/.exec(w)?.[0] ?? 'analysis warning' });
     }, history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
       emit('architecture', 'Results available; synthesizing architecture in the background', analysisProgress('architecture'));
@@ -259,7 +256,6 @@ export async function analyzeDirectory(
     }
   }
 
-  ctx.index = new RepoIndex(db, repoId, embeddings);
   if (history) {
     progress('history', 'Indexing git history', 0);
     try {
@@ -297,13 +293,6 @@ export async function analyzeDirectory(
     for (const [p, c] of fileComp) updMeta.run(c, repoId, p);
   })();
 
-  progress('flows', 'Tracing key flows for sequence diagrams', 0);
-  try {
-    saveFlows(db, repoId, await analyzeFlows(llm, ctx.index, warn));
-  } catch (err) {
-    log('warn', 'analysis.flows.failed', errorDetails(err));
-    warn(`Flow tracing failed: ${(err as Error).message}`);
-  }
   onResultsReady();
   progress('architecture', 'Synthesizing architecture in the background', 0);
   ctx.progress = (m, p) => progress('architecture', m, p);
@@ -320,21 +309,6 @@ export async function analyzeDirectory(
       const assignments = assignFilesToComponents(ctx, synthesized);
       db.prepare(`UPDATE files SET meta=json_remove(coalesce(meta,'{}'), '$.component') WHERE repo_id=?`).run(repoId);
       for (const [p, c] of assignments) updMeta.run(c, repoId, p);
-      // Flows were traced against the heuristic diagram: move each participant to the synthesized
-      // component that took over most of its files, and drop links that have no successor.
-      const ids = new Set(synthesized.components.map((c) => c.id));
-      const successor = componentSuccessors(fileComp, assignments);
-      const rows = db.prepare('SELECT id, content FROM flows WHERE repo_id=?').all(repoId) as { id: string; content: string }[];
-      for (const row of rows) {
-        const flow = JSON.parse(row.content);
-        for (const p of flow.participants) {
-          if (!p.componentId || ids.has(p.componentId)) continue;
-          const next = successor.get(p.componentId);
-          if (next) p.componentId = next;
-          else delete p.componentId;
-        }
-        db.prepare('UPDATE flows SET content=? WHERE repo_id=? AND id=?').run(JSON.stringify(flow), repoId, row.id);
-      }
     })();
     return { architecture: synthesized };
   } catch (err) {
@@ -342,21 +316,6 @@ export async function analyzeDirectory(
     warn(`Architecture synthesis failed: ${(err as Error).message}; keeping static architecture`);
     return { architecture: arch };
   }
-}
-
-/** For each old component id, the new component id that most of its files were assigned to. */
-function componentSuccessors(before: Map<string, string>, after: Map<string, string>): Map<string, string> {
-  const counts = new Map<string, Map<string, number>>();
-  for (const [file, oldId] of before) {
-    const newId = after.get(file);
-    if (!newId) continue;
-    const c = counts.get(oldId) ?? new Map<string, number>();
-    c.set(newId, (c.get(newId) ?? 0) + 1);
-    counts.set(oldId, c);
-  }
-  const out = new Map<string, string>();
-  for (const [oldId, c] of counts) out.set(oldId, [...c].sort((a, b) => b[1] - a[1])[0]![0]);
-  return out;
 }
 
 /** Swap one category's insights and suggested questions, keeping it ahead of the other categories. */

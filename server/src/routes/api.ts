@@ -17,7 +17,6 @@ import { invalidateVectors } from '../qa/retrieve.js';
 import { fileContent, fileTree, getArchitecture, snippet } from './queries.js';
 import { clickableIdentifiers, explain } from '../agent/explain.js';
 import { answerOnDiagram } from '../agent/diagram.js';
-import { listFlows, saveFlows, traceFlow } from '../analyze/flows.js';
 import { RepoIndex } from '../agent/tools.js';
 import { fileHistory, repoHistorySummary } from '../history/index.js';
 import { blame, commitDetails, symbolHistory } from '../history/symbol.js';
@@ -43,7 +42,7 @@ const ExplainSchema = z.object({
   snippet: z.object({ text: z.string().min(1).max(20_000), startLine: z.number().int().optional(), endLine: z.number().int().optional() }).optional(),
   refresh: z.boolean().optional(),
 });
-const QuestionSchema = z.object({ question: z.string().min(1).max(1000), refresh: z.boolean().optional(), save: z.boolean().optional() });
+const QuestionSchema = z.object({ question: z.string().min(1).max(1000), refresh: z.boolean().optional() });
 
 /** Run an agent task over SSE, forwarding its events until it finishes or the client leaves. */
 async function streamTask(res: Response, task: (emit: (e: unknown) => void, isClosed: () => boolean) => Promise<void>) {
@@ -303,27 +302,6 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const p = typeof req.query.path === 'string' ? req.query.path : '';
     const rows = db.prepare(`SELECT key, created_at FROM explanations WHERE repo_id=? AND (key = ? OR key LIKE ?)`).all(req.params.id, `file:${p}`, `sym:${p}#%`) as any[];
     res.json(rows.map((r) => ({ key: r.key, createdAt: r.created_at })));
-  });
-
-  r.get('/repos/:id/flows', (req, res) => {
-    if (getRepo(req, res)) res.json(listFlows(db, req.params.id));
-  });
-
-  r.post('/repos/:id/flows', async (req, res) => {
-    const row = getRepo(req, res);
-    if (!row) return;
-    const parsed = QuestionSchema.safeParse(req.body);
-    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
-    await streamTask(res, async (emit) => {
-      const flow = await traceFlow(db, llm, embeddings, row.id, parsed.data.question, emit);
-      if (flow && parsed.data.save !== false) saveFlows(db, row.id, [flow], false);
-    });
-  });
-
-  r.delete('/repos/:id/flows/:fid', (req, res) => {
-    if (!getRepo(req, res)) return;
-    db.prepare('DELETE FROM flows WHERE repo_id=? AND id=?').run(req.params.id, req.params.fid);
-    res.json({ ok: true });
   });
 
   r.post('/repos/:id/diagram/answer', async (req, res) => {

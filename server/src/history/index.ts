@@ -273,6 +273,3 @@ export function repoHistorySummary(db: DB, repoId: string) {
   };
 }
 
-export function fileMetaHistory(meta: string | null) {
-  return json<any>(meta, {}).history ?? null;
-}

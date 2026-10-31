@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Architecture, Component, Connection, Flow } from '@cq/shared';
+import type { Architecture, Component, Connection } from '@cq/shared';
 import { api } from '../lib/api';
 import { langFromPath, TYPE_COLORS } from '../lib/format';
 import { useRepo } from '../lib/repoContext';
@@ -21,37 +21,15 @@ function PanelShell({ title, kicker, color, onClose, children }: { title: React.
   );
 }
 
-function FlowLinks({ flows, onOpenFlow }: { flows: Flow[]; onOpenFlow: (id: string) => void }) {
-  if (!flows.length) return null;
-  return (
-    <section>
-      <h4>Flows ({flows.length})</h4>
-      <div className="link-list">
-        {flows.map((f) => (
-          <button key={f.id} className="link-row" onClick={() => onOpenFlow(f.id)}>
-            <span className="arrow">⇄</span>
-            <span className="grow">{f.title}<div className="muted small">{f.trigger}</div></span>
-            <span className="muted small">{f.steps.length} steps</span>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 export function OverviewPanel({
   arch,
-  flows,
   onClose,
   onSelect,
-  onOpenFlow,
   onAsk,
 }: {
   arch: Architecture;
-  flows: Flow[];
   onClose: () => void;
   onSelect: (id: string) => void;
-  onOpenFlow: (id: string) => void;
   onAsk: (question: string) => void;
 }) {
   const verified = arch.connections.filter((c) => c.confidence === 'verified').length;
@@ -61,7 +39,6 @@ export function OverviewPanel({
       {arch.connections.some((c) => c.confidence) && (
         <div className="muted small">{verified} of {arch.connections.length} connections were verified against the code. Dotted arrows marked “?” are inferred.</div>
       )}
-      <FlowLinks flows={flows} onOpenFlow={onOpenFlow} />
       <section>
         <h4>Components ({arch.components.length})</h4>
         <div className="link-list">
@@ -77,7 +54,7 @@ export function OverviewPanel({
       <section>
         <h4>Show me on the diagram</h4>
         <div className="suggest">
-          {[...flows.slice(0, 2).map((f) => `What happens in "${f.title}"?`), 'How does a request travel from entry point to storage?', 'Which components talk to external systems?'].map((q) => (
+          {['How does a request travel from entry point to storage?', 'Which components talk to external systems?'].map((q) => (
             <button key={q} onClick={() => onAsk(q)}>{q}</button>
           ))}
         </div>
@@ -92,19 +69,14 @@ export function ComponentPanel({
   onClose,
   onSelectConnection,
   onDrill,
-  flows,
-  onOpenFlow,
 }: {
   comp: Component;
   arch: Architecture;
   onClose: () => void;
   onSelectConnection: (id: string) => void;
   onDrill: () => void;
-  flows: Flow[];
-  onOpenFlow: (id: string) => void;
 }) {
   const { repo, askAbout, openCode, openFile } = useRepo();
-  const myFlows = flows.filter((f) => f.participants.some((p) => p.componentId === comp.id));
   const [files, setFiles] = useState<{ path: string; summary: string | null; lines: number; history?: { lastAt?: string; lastBy?: string; lastSha?: string; commits?: number } | null }[] | null>(null);
   const { openCommit } = useRepo();
   useEffect(() => {
@@ -149,7 +121,6 @@ export function ComponentPanel({
           </div>
         </section>
       ) : null}
-      <FlowLinks flows={myFlows} onOpenFlow={onOpenFlow} />
       {files?.some((f) => f.history) && (() => {
         const withH = files.filter((f) => f.history?.lastAt);
         const recent = [...withH].sort((a, b) => String(b.history!.lastAt).localeCompare(String(a.history!.lastAt))).slice(0, 5);

@@ -169,16 +169,6 @@ CREATE TABLE IF NOT EXISTS explanations (
   PRIMARY KEY (repo_id, key)
 );
 
-CREATE TABLE IF NOT EXISTS flows (
-  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
-  id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  position INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (repo_id, id)
-);
-
 CREATE TABLE IF NOT EXISTS diagram_answers (
   repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
   question TEXT NOT NULL,
@@ -262,6 +252,8 @@ function migrate(db: DB) {
   // Extra architecture fields (layer, group, protocol, confidence, ...) are stored as JSON.
   add('components', 'extra', "TEXT NOT NULL DEFAULT '{}'");
   add('connections', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  // Flows (sequence diagrams) were removed.
+  db.exec('DROP TABLE IF EXISTS flows');
 }
 
 export function json<T>(v: string | null | undefined, fallback: T): T {
@@ -276,7 +268,7 @@ export function json<T>(v: string | null | undefined, fallback: T): T {
 /** Remove all derived analysis for a repo (keeps the repo row, jobs and conversations). */
 export function clearAnalysis(db: DB, repoId: string) {
   const tx = db.transaction(() => {
-    for (const t of ['file_edges', 'symbols', 'refs', 'chunks', 'components', 'connections', 'insights', 'suggested_questions', 'flows', 'diagram_answers', 'commits', 'file_commits', 'symbol_history']) {
+    for (const t of ['file_edges', 'symbols', 'refs', 'chunks', 'components', 'connections', 'insights', 'suggested_questions', 'diagram_answers', 'commits', 'file_commits', 'symbol_history']) {
       db.prepare(`DELETE FROM ${t} WHERE repo_id = ?`).run(repoId);
     }
   });

@@ -4,7 +4,6 @@ import type { DB } from '../db/index.js';
 import { AGENT_GUIDANCE } from '../llm/agent.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import { agentWithFallback } from '../llm/index.js';
-import { listFlows } from '../analyze/flows.js';
 import { getArchitecture } from '../routes/queries.js';
 import { agentEventMapper } from './explain.js';
 import { RepoIndex, repoTools } from './tools.js';
@@ -26,7 +25,6 @@ export async function answerOnDiagram(
   }
   const ix = new RepoIndex(db, repoId, embeddings);
   const arch = getArchitecture(db, repoId);
-  const flows = listFlows(db, repoId);
   const res = await agentWithFallback(llm, {
     system: `You answer questions about a codebase by pointing at its architecture diagram. ${AGENT_GUIDANCE}
 Investigate as needed, then submit_diagram_answer with: a concise markdown answer, the component and connection ids involved (ONLY ids from the diagram below), and an ordered tour (3-8 stops) that walks the path step by step with a caption per stop and a code ref where useful.`,
@@ -36,7 +34,6 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
         content: [
           `# Diagram components\n${arch.components.map((c) => `- ${c.id}: ${c.name} [${c.type}] ${c.paths.join(', ')} — ${c.description.slice(0, 160)}`).join('\n')}`,
           `# Diagram connections\n${arch.connections.map((e) => `- ${e.id}: ${e.from} → ${e.to} [${e.kind}] ${e.label}`).join('\n')}`,
-          flows.length ? `# Known flows\n${flows.map((f) => `- ${f.title}: ${f.steps.map((s) => s.label).join(' → ')}`).join('\n')}` : '',
           `Question: ${q}`,
         ]
           .filter(Boolean)
@@ -49,29 +46,10 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
     final: { name: 'diagram_answer', schema: DiagramAnswerSchema },
     onEvent: agentEventMapper(emit),
     scripted: async (call) => {
-      // Offline: match the question to a traced flow, else to components by keyword.
+      // Offline: match the question to components by keyword.
       await call('search_code', { query: q, limit: 4 });
       const words = q.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
       const score = (t: string) => words.filter((w) => t.toLowerCase().includes(w)).length;
-      const flow = [...flows].sort((a, b) => score(b.title + b.steps.map((s) => s.label).join(' ')) - score(a.title + a.steps.map((s) => s.label).join(' ')))[0];
-      if (flow && score(flow.title + flow.steps.map((s) => s.label).join(' ')) > 0) {
-        const comps = [...new Set(flow.participants.map((p) => p.componentId).filter((x): x is string => Boolean(x)))];
-        const conns = arch.connections.filter((e) => comps.includes(e.from) && comps.includes(e.to)).map((e) => e.id);
-        return {
-          final: {
-            answerMd: `${flow.summary}\n\n${flow.steps.map((s, i) => `${i + 1}. **${s.label}**${s.ref ? ` [${s.ref.path}:${s.ref.startLine}]` : ''}`).join('\n')}`,
-            highlight: { componentIds: comps, connectionIds: conns },
-            tour: flow.steps
-              .map((s) => {
-                const to = flow.participants.find((p) => p.id === s.to)?.componentId;
-                const from = flow.participants.find((p) => p.id === s.from)?.componentId;
-                const conn = arch.connections.find((e) => e.from === from && e.to === to);
-                return conn ? { connectionId: conn.id, caption: s.label, ref: s.ref } : to ? { componentId: to, caption: s.label, ref: s.ref } : null;
-              })
-              .filter((x): x is NonNullable<typeof x> => Boolean(x)),
-          },
-        };
-      }
       const comps = arch.components.filter((c) => score(`${c.name} ${c.description} ${c.paths.join(' ')}`) > 0).map((c) => c.id);
       return {
         final: {

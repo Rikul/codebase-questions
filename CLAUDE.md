@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A web app that clones a Git repo, analyzes it (static analysis + LLM), stores a knowledge base in SQLite, and lets users explore architecture, flows, insights, file/symbol explanations, git history, and ask questions. npm workspaces: `server/` (Express 5 API + pipeline), `web/` (React + Vite), `shared/` (types + zod schemas, imported as `@cq/shared` via path aliases in both tsconfigs and the vite/vitest configs; it is not a separate package).
+A web app that clones a Git repo, analyzes it (static analysis + LLM), stores a knowledge base in SQLite, and lets users explore architecture, insights, file/symbol explanations, git history, and ask questions. npm workspaces: `server/` (Express 5 API + pipeline), `web/` (React + Vite), `shared/` (types + zod schemas, imported as `@cq/shared` via path aliases in both tsconfigs and the vite/vitest configs; it is not a separate package).
 
 ## Commands
 
@@ -32,14 +32,14 @@ Config is all env vars (see `.env.example`, parsed in `server/src/config.ts`). D
 
 ## Architecture
 
-**Ingestion pipeline** (`server/src/ingest/pipeline.ts`): a single in-process sequential job queue; progress is broadcast via the `jobEvents` EventEmitter (streamed to the UI). Order: clone (`clone.ts`) → scan → parse (imports, symbols, routes, env vars, manifests) → import graph + module grouping + centrality (`graph.ts`) → chunk + FTS5 index (+ optional embeddings) → git history index (`server/src/history/`) → cross-reference index (`refs.ts`) → LLM steps in `server/src/analyze/` (per-file summaries, architecture, insights, flows). `analyzeDirectory()` runs the pipeline on a local directory and is what tests use.
+**Ingestion pipeline** (`server/src/ingest/pipeline.ts`): a single in-process sequential job queue; progress is broadcast via the `jobEvents` EventEmitter (streamed to the UI). Order: clone (`clone.ts`) → scan → parse (imports, symbols, routes, env vars, manifests) → import graph + module grouping + centrality (`graph.ts`) → chunk + FTS5 index (+ optional embeddings) → git history index (`server/src/history/`) → cross-reference index (`refs.ts`) → LLM steps in `server/src/analyze/` (per-file summaries, insights, then architecture synthesis in the background). `analyzeDirectory()` runs the pipeline on a local directory and is what tests use.
 
 **LLM layer** (`server/src/llm/`): `LLMProvider` interface (`provider.ts`) with Anthropic (structured output via forced tool use), OpenAI (JSON-schema, falls back to JSON mode), and `MockProvider` (offline). Provider is chosen by `LLM_PROVIDER` or whichever API key is present; with no key, the app runs fully offline on the mock. Every LLM step must have a static fallback:
 - `jsonWithFallback(llm, opts)` — structured call; on failure parses `opts.heuristic()` with the same zod schema.
 - `agentWithFallback(llm, opts)` — tool-use agent run (`llm/agent.ts` handles budgets and validates the final submission against a schema, sending invalid ones back to the model); on failure replays `opts.scripted` via `MockProvider`.
 When adding an LLM feature, provide the heuristic/scripted path so offline mode and failure cases keep working.
 
-**Agent tools** (`server/src/agent/tools.ts`, `RepoIndex`): read-only tools confined to the checkout (read_file, grep, find_definition, find_references, importer_chain, history tools, etc.). Used by the explainer (`explain.ts`), ask-the-diagram (`diagram.ts`), flow tracing (`analyze/flows.ts`), and Q&A (`qa/answer.ts`, retrieval in `qa/retrieve.ts`).
+**Agent tools** (`server/src/agent/tools.ts`, `RepoIndex`): read-only tools confined to the checkout (read_file, grep, find_definition, find_references, importer_chain, history tools, etc.). Used by the explainer (`explain.ts`), ask-the-diagram (`diagram.ts`), and Q&A (`qa/answer.ts`, retrieval in `qa/retrieve.ts`).
 
 **DB** (`server/src/db/index.ts`): better-sqlite3, schema is `CREATE TABLE IF NOT EXISTS` plus an additive `migrate()` that adds missing columns. New columns on existing tables must be added there too. Flexible architecture fields go in the JSON `extra` column on `components`/`connections`.
 

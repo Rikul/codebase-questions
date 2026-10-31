@@ -2,7 +2,6 @@ import type { ScannedFile } from '../ingest/scan.js';
 import type { Dependency, FileFacts } from '../ingest/parse.js';
 import type { ImportGraph, ModuleEdge, ModuleGroup } from '../ingest/graph.js';
 import type { LLMProvider } from '../llm/index.js';
-import type { RepoIndex } from '../agent/tools.js';
 import type { repoHistorySummary } from '../history/index.js';
 
 /** Everything the analysis steps know about a repository after static ingestion. */
@@ -21,7 +20,6 @@ export interface RepoContext {
   summaries: Map<string, string>;
   llm: LLMProvider;
   /** DB-backed index for agent tools (set once static indexing is persisted). */
-  index?: RepoIndex;
   /** Repo-level git history facts (null without history). */
   history?: ReturnType<typeof repoHistorySummary>;
   warn: (msg: string) => void;

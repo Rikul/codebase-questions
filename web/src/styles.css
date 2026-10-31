@@ -129,7 +129,6 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
   display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px;
   font-size: 12px; font-weight: 500; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border);
 }
-.chip.dot::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--dot, var(--text-3)); }
 .error-box { background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: 8px; padding: 10px 12px; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -179,7 +178,6 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }
 .repo-body { flex: 1; min-height: 0; display: flex; }
-.scroll { overflow: auto; }
 
 /* ---------- diagram ---------- */
 .diagram-wrap { flex: 1; position: relative; min-width: 0; }
@@ -346,19 +344,12 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .code-table tr.active { background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .code-table td.ln { user-select: none; }
 .sel-btn { position: absolute; z-index: 5; border: 0; border-radius: 999px; background: var(--accent); color: #fff; padding: 5px 12px; font-size: 12.5px; font-weight: 600; box-shadow: var(--shadow-lg); cursor: pointer; }
-.modal.wide { max-width: 1320px; }
-.modal-split { display: flex; min-height: 0; flex: 1; }
-.modal-split .body { flex: 1; min-width: 0; }
-.modal-split .panel { border-left: 1px solid var(--border); max-height: calc(88vh - 70px); }
 .files .panel.explain { min-height: 0; }
 
 /* ---------- architecture shell ---------- */
 .arch-shell { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .arch-top { display: flex; align-items: center; gap: 12px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .arch-body { flex: 1; display: flex; min-height: 0; min-width: 0; position: relative; }
-.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
-.seg button { border: 0; background: transparent; color: var(--text-2); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 13px; }
-.seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
 .ask-diagram { display: flex; gap: 6px; padding: 4px; align-items: center; }
 .ask-diagram .input { height: 28px; width: 320px; max-width: 46vw; font-size: 13px; }
 .group-node { width: 100%; height: 100%; border: 1.5px dashed var(--border-strong); border-radius: 14px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
@@ -370,42 +361,12 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .tour-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
 .tour-list li.active b { color: var(--accent); }
 
-/* ---------- flows ---------- */
-.flows { flex: 1; display: flex; min-height: 0; min-width: 0; }
-.flow-list { width: 280px; border-right: 1px solid var(--border); background: var(--surface); overflow: auto; padding: 10px 8px 8px; display: grid; gap: 4px; align-content: start; }
-.trace-form { display: flex; gap: 6px; margin-bottom: 6px; }
-.trace-form .input { height: 30px; font-size: 13px; }
-.flow-item { display: grid; gap: 2px; text-align: left; border: 1px solid transparent; background: transparent; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text); }
-.flow-item:hover { background: var(--surface-2); }
-.flow-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
-.flow-main { flex: 1; overflow: auto; padding: 20px 24px 24px; display: grid; gap: 14px; align-content: start; min-width: 0; }
-.flow-head { display: flex; gap: 8px; align-items: flex-start; }
-.seq-wrap { overflow: auto; padding: 8px; }
-.seq .lifeline { stroke: var(--border-strong); stroke-dasharray: 4 4; }
-.seq .seq-actor { fill: var(--surface); stroke-width: 1.5; }
-.seq .seq-actor-label { fill: var(--text); font-size: 12.5px; font-weight: 600; }
-.seq .seq-label { fill: var(--text-2); font-size: 11.5px; font-family: var(--mono); }
-.seq .seq-num { fill: var(--text-3); font-size: 11px; }
-.seq .seq-hit { fill: transparent; }
-.seq .seq-step { cursor: pointer; }
-.seq .seq-step:hover .seq-hit, .seq .seq-step.active .seq-hit { fill: var(--accent-soft); }
-.seq .seq-step.active .seq-label { fill: var(--accent); font-weight: 600; }
-.step-list { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
-.step-list li { padding: 5px 8px; border-radius: 6px; cursor: pointer; }
-.step-list li > .grow { display: inline; }
-.step-list li .cite { float: right; }
-.step-list li:hover, .step-list li.active { background: var(--surface-2); }
-
 @media (max-width: 860px) {
-  .flow-list { display: none; }
   .ask-diagram .input { width: 180px; }
-  .modal-split .panel { position: static; width: 100%; }
-  .modal-split { flex-direction: column; }
 }
 
 /* Grid rows size to content (scrollable children must not shrink), and columns may not grow past the panel. */
-.panel-body, .flow-main, .insights-inner { grid-auto-rows: max-content; grid-template-columns: minmax(0, 1fr); }
-.seq-wrap { overflow-x: auto; overflow-y: hidden; }
+.panel-body, .insights-inner { grid-auto-rows: max-content; grid-template-columns: minmax(0, 1fr); }
 
 /* ---------- history ---------- */
 .history { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); }

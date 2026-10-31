@@ -55,7 +55,3 @@ export function langFromPath(p: string): string | undefined {
 }
 
 /** Literal colors for SVG attributes (the minimap cannot resolve CSS variables). */
-export const TYPE_HEX: Record<ComponentType, string> = {
-  frontend: '#3b82f6', api: '#8b5cf6', service: '#0ea5a4', library: '#64748b', database: '#f59e0b', queue: '#ec4899',
-  worker: '#14b8a6', cli: '#6366f1', config: '#94a3b8', external: '#ef4444', test: '#84cc16', other: '#a1a1aa',
-};

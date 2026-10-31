@@ -89,7 +89,7 @@ describe('analysis pipeline (offline provider)', () => {
 });
 
 describe('background architecture synthesis', () => {
-  it('publishes insights and flows before synthesis and preserves them when architecture changes', async () => {
+  it('publishes insights before synthesis and preserves them when architecture changes', async () => {
     const db = openDb(':memory:');
     db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('background', 'sample', 'https://github.com/acme/sample', 'running')`).run();
     const mock = new MockProvider();
@@ -112,11 +112,9 @@ describe('background architecture synthesis', () => {
     const count = (table: string) => (db.prepare(`SELECT count(*) n FROM ${table} WHERE repo_id='background'`).get() as { n: number }).n;
     try {
       expect(count('insights')).toBeGreaterThan(0);
-      expect(count('flows')).toBeGreaterThan(0);
-      expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('flows'));
-      expect(progress[stages.indexOf('store')]).toBe(0.7);
-      expect(progress[stages.indexOf('flows')]).toBe(0.8);
-      expect(progress[stages.indexOf('architecture')]).toBe(0.9);
+      expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('store'));
+      expect(progress[stages.indexOf('store')]).toBeCloseTo(7 / 9);
+      expect(progress[stages.indexOf('architecture')]).toBeCloseTo(8 / 9);
       expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
       // A user action performed while synthesis is running must survive its completion.
       db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background' AND category!='architecture'`).run();
@@ -135,11 +133,6 @@ describe('background architecture synthesis', () => {
     const positions = (db.prepare(`SELECT position FROM insights WHERE repo_id='background' ORDER BY position`).all() as any[]).map((r) => r.position);
     expect(positions).toEqual(positions.map((_, i) => i));
     expect((db.prepare(`SELECT count(*) n FROM suggested_questions WHERE repo_id='background' AND category='architecture'`).get() as any).n).toBeGreaterThan(0);
-    // Flow participants follow their files to the synthesized components instead of losing links.
-    const flows = (db.prepare(`SELECT content FROM flows WHERE repo_id='background'`).all() as any[]).map((r) => JSON.parse(r.content));
-    const links = flows.flatMap((f) => f.participants.map((p: any) => p.componentId).filter(Boolean));
-    expect(links.length).toBeGreaterThan(0);
-    expect(links.every((id: string) => id.startsWith('new-') && architecture.components.some((c) => c.id === id))).toBe(true);
     db.close();
   });
 });

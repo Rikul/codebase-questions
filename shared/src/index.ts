@@ -38,7 +38,6 @@ export const CodeRefSchema = z.object({
   endLine: z.number().int().min(1).optional(),
   note: z.string().optional(),
 });
-export type CodeRef = z.infer<typeof CodeRefSchema>;
 
 export const LAYERS = ['entry', 'interface', 'core', 'data', 'infra', 'external'] as const;
 export const LayerSchema = z.enum(LAYERS);
@@ -135,11 +134,6 @@ export interface FileNode {
   children?: FileNode[];
 }
 
-export interface FileEdge {
-  from: string;
-  to: string;
-  kind: string;
-}
 
 export interface Citation {
   path: string;
@@ -250,33 +244,6 @@ export type ExplainEvent =
   | { type: 'target'; target: ExplainTarget }
   | { type: 'result'; explanation: Explanation; cached: boolean; createdAt: string };
 
-// ---------- Flows (sequence diagrams) ----------
-
-export const FlowSchema = z.object({
-  id: z.string(),
-  title: z.string().describe('e.g. "Handle GET /users/:id"'),
-  trigger: z.string().describe('What starts it: an HTTP route, CLI command, job, startup, user action'),
-  summary: z.string().describe('2-3 sentence markdown summary'),
-  participants: z
-    .array(z.object({ id: z.string(), label: z.string(), componentId: z.string().optional().describe('architecture component id, if any') }))
-    .describe('Ordered left-to-right lifelines: caller first'),
-  steps: z
-    .array(
-      z.object({
-        from: z.string().describe('participant id'),
-        to: z.string().describe('participant id'),
-        label: z.string().describe('function call or message, e.g. "getUser(id)" or "SELECT users"'),
-        kind: z.enum(['call', 'return', 'async', 'db', 'http', 'event']),
-        ref: CodeRefSchema.optional().describe('where this step happens in code'),
-        note: z.string().optional(),
-      }),
-    )
-    .describe('Messages in time order'),
-});
-export type Flow = z.infer<typeof FlowSchema>;
-
-export type FlowEvent = AgentStreamEvent | { type: 'result'; flow: Flow };
-
 // ---------- "Ask the diagram" ----------
 
 export const DiagramAnswerSchema = z.object({
@@ -335,7 +302,8 @@ export const ExportSchema = z.object({
   chunks: z
     .array(z.object({ path: z.string(), startLine: z.number(), endLine: z.number(), content: z.string() }))
     .optional(),
-  flows: z.array(FlowSchema).optional(),
+  /** Flows (sequence diagrams) were removed; still accepted so older exports import, but ignored. */
+  flows: z.array(z.unknown()).optional(),
   explanations: z.array(z.object({ key: z.string(), fileHash: z.string(), content: z.string(), createdAt: z.string() })).optional(),
   history: z
     .object({
@@ -366,7 +334,6 @@ export const ANALYSIS_STEPS = [
   { id: 'summarize', label: 'Summarize key files with the LLM' },
   { id: 'insights', label: 'Write architecture, onboarding, security and API insights' },
   { id: 'store', label: 'Save insights and initial diagram' },
-  { id: 'flows', label: 'Trace and save key flows' },
   { id: 'architecture', label: 'Synthesize and update architecture in background' },
 ] as const;
 

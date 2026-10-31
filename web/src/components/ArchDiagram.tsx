@@ -14,13 +14,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import ELK from 'elkjs/lib/elk.bundled.js';
-import type { AgentStep, Architecture, Component, ComponentType, Connection, DiagramAnswer, DiagramEvent, Flow, Layer } from '@cq/shared';
+import type { AgentStep, Architecture, Component, ComponentType, Connection, DiagramAnswer, DiagramEvent, Layer } from '@cq/shared';
 import { api, streamPost } from '../lib/api';
 import { KIND_STYLE, TYPE_COLORS } from '../lib/format';
 import { useRepo } from '../lib/repoContext';
 import { AgentTrace, upsertStep } from './AgentTrace';
 import { ComponentPanel, ConnectionPanel, OverviewPanel } from './ArchPanels';
-import { FlowsView } from './FlowsView';
 import { Markdown } from './Markdown';
 
 const elk = new ELK();
@@ -182,7 +181,7 @@ interface AnswerState {
   error: string | null;
 }
 
-function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[]; onOpenFlow: (id: string) => void }) {
+function Diagram({ arch }: { arch: Architecture }) {
   const { repo, openCode } = useRepo();
   const rf = useReactFlow();
   const [dir, setDir] = useState<Dir>('RIGHT');
@@ -337,7 +336,6 @@ function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[
   const types = [...new Set(arch.components.map((c) => c.type))];
   const comp = sel?.kind === 'component' ? arch.components.find((c) => c.id === sel.id) : undefined;
   const conn = sel?.kind === 'connection' ? arch.connections.find((c) => c.id === sel.id) : undefined;
-  const suggested = flows.slice(0, 3).map((f) => `What happens in "${f.title}"?`);
 
   return (
     <>
@@ -374,8 +372,7 @@ function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[
                   askDiagram(q);
                 }}
               >
-                <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask the diagram, e.g. what happens on login?" aria-label="Ask the diagram" list="diagram-suggestions" />
-                <datalist id="diagram-suggestions">{suggested.map((s) => <option key={s} value={s} />)}</datalist>
+                <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask the diagram, e.g. what happens on login?" aria-label="Ask the diagram" />
                 <button className="btn sm primary" disabled={!q.trim() || ans?.running}>Show me</button>
               </form>
             </>
@@ -439,7 +436,7 @@ function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[
           </div>
         )}
       </div>
-      {!drill && sel?.kind === 'overview' && <OverviewPanel arch={arch} flows={flows} onClose={() => setSel(null)} onSelect={(id) => setSel({ kind: 'component', id })} onOpenFlow={onOpenFlow} onAsk={(question) => { setQ(question); askDiagram(question); }} />}
+      {!drill && sel?.kind === 'overview' && <OverviewPanel arch={arch} onClose={() => setSel(null)} onSelect={(id) => setSel({ kind: 'component', id })} onAsk={(question) => { setQ(question); askDiagram(question); }} />}
       {!drill && sel?.kind === 'answer' && ans && (
         <aside className="panel">
           <div className="panel-head">
@@ -480,7 +477,7 @@ function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[
         </aside>
       )}
       {!drill && comp && (
-        <ComponentPanel comp={comp} arch={arch} flows={flows} onClose={() => setSel(null)} onSelectConnection={(id) => setSel({ kind: 'connection', id })} onDrill={() => setDrill(comp)} onOpenFlow={onOpenFlow} />
+        <ComponentPanel comp={comp} arch={arch} onClose={() => setSel(null)} onSelectConnection={(id) => setSel({ kind: 'connection', id })} onDrill={() => setDrill(comp)} />
       )}
       {!drill && conn && <ConnectionPanel conn={conn} arch={arch} onClose={() => setSel(null)} onSelectComponent={(id) => setSel({ kind: 'component', id })} />}
     </>
@@ -490,43 +487,24 @@ function Diagram({ arch, flows, onOpenFlow }: { arch: Architecture; flows: Flow[
 export function ArchDiagram() {
   const { repo } = useRepo();
   const [arch, setArch] = useState<Architecture | null>(null);
-  const [flows, setFlows] = useState<Flow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<'components' | 'flows'>('components');
-  const [flowId, setFlowId] = useState<string | null>(null);
 
-  const loadFlows = useCallback(() => api<Flow[]>(`/repos/${repo.id}/flows`).then(setFlows).catch(() => undefined), [repo.id]);
   useEffect(() => {
     api<Architecture>(`/repos/${repo.id}/architecture`).then(setArch, (e) => setError(e.message));
-    loadFlows();
-  }, [repo.id, repo.updatedAt, repo.status, loadFlows]);
+  }, [repo.id, repo.updatedAt, repo.status]);
 
   if (error) return <div className="empty">{error}</div>;
   if (!arch) return <div className="empty"><span className="spinner" /></div>;
   if (!arch.components.length) return <div className="empty">No architecture yet. Run the analysis first.</div>;
-  const openFlow = (id: string) => {
-    setFlowId(id);
-    setView('flows');
-  };
   return (
     <div className="arch-shell">
       <div className="arch-top">
-        <div className="seg">
-          <button className={view === 'components' ? 'active' : ''} onClick={() => setView('components')}>◇ Components</button>
-          <button className={view === 'flows' ? 'active' : ''} onClick={() => setView('flows')}>⇄ Flows{flows.length ? ` (${flows.length})` : ''}</button>
-        </div>
-        <span className="muted small">
-          {view === 'components' ? `${arch.components.length} components · ${arch.connections.length} connections` : 'Sequence diagrams of key runtime paths. Click a step to see its code.'}
-        </span>
+        <span className="muted small">{arch.components.length} components · {arch.connections.length} connections</span>
       </div>
       <div className="arch-body">
-      {view === 'components' ? (
         <ReactFlowProvider>
-          <Diagram arch={arch} flows={flows} onOpenFlow={openFlow} />
+          <Diagram arch={arch} />
         </ReactFlowProvider>
-      ) : (
-        <FlowsView arch={arch} flows={flows} selectedId={flowId} onSelect={setFlowId} onChanged={loadFlows} />
-      )}
       </div>
     </div>
   );

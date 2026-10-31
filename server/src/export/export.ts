@@ -5,7 +5,6 @@ import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
-import { saveFlows } from '../analyze/flows.js';
 import { storeFileHistorySummaries } from '../history/index.js';
 
 export function exportProject(db: DB, repoId: string, includeSource: boolean): ProjectExport {
@@ -51,7 +50,6 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
     suggestedQuestions,
     conversations,
   };
-  out.flows = (db.prepare('SELECT content FROM flows WHERE repo_id=? ORDER BY position').all(repoId) as any[]).map((r) => JSON.parse(r.content));
   out.explanations = (db.prepare('SELECT key, file_hash, content, created_at FROM explanations WHERE repo_id=?').all(repoId) as any[]).map((r) => ({ key: r.key, fileHash: r.file_hash, content: r.content, createdAt: r.created_at }));
   out.symbols = (db.prepare('SELECT path, name, kind, line, end_line, exported, parent, signature FROM symbols WHERE repo_id=?').all(repoId) as any[]).map((s) => ({
     path: s.path, name: s.name, kind: s.kind, line: s.line, endLine: s.end_line ?? s.line, exported: Boolean(s.exported), parent: s.parent, signature: s.signature,
@@ -109,7 +107,6 @@ export function importProject(db: DB, data: unknown): string {
       for (const m of c.messages) insM.run(cid, m.role, m.content, m.category, JSON.stringify(m.citations), m.createdAt);
     }
     saveAnalysis(db, repoId, p.architecture as Architecture | null, p.insights, p.suggestedQuestions);
-    if (p.flows?.length) saveFlows(db, repoId, p.flows);
     const insX = db.prepare('INSERT OR REPLACE INTO explanations (repo_id, key, file_hash, content, created_at) VALUES (?, ?, ?, ?, ?)');
     for (const x of p.explanations ?? []) insX.run(repoId, x.key, x.fileHash, x.content, x.createdAt);
     const insS = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');

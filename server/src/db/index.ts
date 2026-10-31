@@ -169,6 +169,17 @@ CREATE TABLE IF NOT EXISTS explanations (
   PRIMARY KEY (repo_id, key)
 );
 
+-- Code reviews: key is 'full' for the whole codebase or 'file:<path>'. version is the commit
+-- (full) or file hash (file) it was written against.
+CREATE TABLE IF NOT EXISTS reviews (
+  repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  version TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (repo_id, key)
+);
+
 CREATE TABLE IF NOT EXISTS diagram_answers (
   repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
   question TEXT NOT NULL,

@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
+import { startReview } from '../agent/review.js';
 import { analyzeArchitecture, assignFilesToComponents, heuristicArchitecture } from '../analyze/architecture.js';
 import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
@@ -63,7 +64,7 @@ export function initJobs(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider
   deps = { db, llm, embeddings };
   // Jobs interrupted by a restart are marked failed.
   db.prepare(`UPDATE jobs SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
-  db.prepare(`UPDATE repos SET status='ready', error='Background architecture synthesis interrupted by server restart' WHERE status='enriching'`).run();
+  db.prepare(`UPDATE repos SET status='ready', error='Background architecture synthesis or code review interrupted by server restart' WHERE status='enriching'`).run();
   db.prepare(`UPDATE repos SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
 }
 
@@ -135,10 +136,10 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => {
       warnings.push(w);
       // Detailed LLM failures are logged at their source; avoid logging raw response data here.
-      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Architecture synthesis failed)/.exec(w)?.[0] ?? 'analysis warning' });
+      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Architecture synthesis failed|Code review)/.exec(w)?.[0] ?? 'analysis warning' });
     }, history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
-      emit('architecture', 'Results available; synthesizing architecture in the background', analysisProgress('architecture'));
+      emit('architecture', 'Results available; synthesizing architecture and reviewing code in the background', analysisProgress('architecture'));
     });
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
@@ -296,6 +297,7 @@ export async function analyzeDirectory(
   onResultsReady();
   progress('architecture', 'Synthesizing architecture in the background', 0);
   ctx.progress = (m, p) => progress('architecture', m, p);
+  let architecture = arch;
   try {
     const synthesized = await analyzeArchitecture(ctx);
     // The architecture insight was written from the heuristic diagram; rewrite it from the final one.
@@ -310,12 +312,27 @@ export async function analyzeDirectory(
       db.prepare(`UPDATE files SET meta=json_remove(coalesce(meta,'{}'), '$.component') WHERE repo_id=?`).run(repoId);
       for (const [p, c] of assignments) updMeta.run(c, repoId, p);
     })();
-    return { architecture: synthesized };
+    architecture = synthesized;
   } catch (err) {
     log('warn', 'analysis.architecture.failed', errorDetails(err));
     warn(`Architecture synthesis failed: ${(err as Error).message}; keeping static architecture`);
-    return { architecture: arch };
   }
+
+  progress('review', 'Reviewing the codebase in the background', 0);
+  let steps = 0;
+  try {
+    // Registered like a user-started review, so the Review tab can follow it live.
+    const run = startReview(db, llm, embeddings, repoId, null, (w) => warn(`Code review: ${w}`));
+    run.listeners.add((e) => {
+      if (e.type === 'step' && e.step.status === 'running') progress('review', `Reviewing: ${e.step.label}`, Math.min(0.95, ++steps / 24));
+      if (e.type === 'error') warn(`Code review failed: ${e.message}`);
+    });
+    await run.done;
+  } catch (err) {
+    log('warn', 'analysis.review.failed', errorDetails(err));
+    warn(`Code review failed: ${(err as Error).message}`);
+  }
+  return { architecture };
 }
 
 /** Swap one category's insights and suggested questions, keeping it ahead of the other categories. */

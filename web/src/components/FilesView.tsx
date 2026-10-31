@@ -70,7 +70,7 @@ export function FilesView({ target }: { target: FileTarget | null }) {
   const [blameOn, setBlameOn] = useState(false);
   const [blameData, setBlameData] = useState<any[] | null>(null);
   const [blameNote, setBlameNote] = useState<string | null>(null);
-  const { openCommit } = useRepo();
+  const { openCommit, openReview } = useRepo();
   useEffect(() => {
     setBlameData(null);
     setBlameNote(null);
@@ -180,6 +180,7 @@ export function FilesView({ target }: { target: FileTarget | null }) {
                 <button className={`btn sm ${blameOn ? 'primary' : ''}`} onClick={() => setBlameOn((b) => !b)} title="Show who last changed each line">
                   {blameOn ? '✓ Blame' : 'Blame'}
                 </button>
+                <button className="btn sm" onClick={() => openReview(file.path)} title="Review this file for bugs, security and design issues">✓ Review</button>
                 {!showExplain && <button className="btn sm" onClick={() => { setShowExplain(true); setSubject({ path: file.path }); }}>✦ Explain</button>}
               </div>
               {file.meta?.history && (

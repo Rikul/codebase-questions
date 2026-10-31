@@ -268,6 +268,15 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
 .suggest button:hover { border-color: var(--accent); color: var(--accent); }
 .sev-summary { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- code review ---------- */
+.side-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 12px 10px 4px; }
+.rev-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: var(--border); }
+.rev-dot.critical { background: var(--sev-critical); } .rev-dot.high { background: var(--sev-high); } .rev-dot.medium { background: var(--sev-medium); }
+.rev-dot.low { background: var(--sev-low); } .rev-dot.info { background: var(--sev-info); } .rev-dot.none { background: var(--ok); }
+.sev-btn { border: 0; cursor: pointer; }
+.sev-btn.dim { opacity: .35; }
+.rev-fix { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--ok); background: var(--surface-2); border-radius: 6px; }
+
 /* ---------- chat ---------- */
 .chat { flex: 1; display: flex; min-height: 0; }
 .chat-side { width: 250px; border-right: 1px solid var(--border); background: var(--surface); overflow: auto; padding: 10px; display: grid; gap: 2px; align-content: start; }

@@ -16,6 +16,7 @@ import { answerQuestion } from '../qa/answer.js';
 import { invalidateVectors } from '../qa/retrieve.js';
 import { fileContent, fileTree, getArchitecture, snippet } from './queries.js';
 import { clickableIdentifiers, explain } from '../agent/explain.js';
+import { getReview, listReviews, reviewRunning, runningFileReviews, streamReview } from '../agent/review.js';
 import { answerOnDiagram } from '../agent/diagram.js';
 import { RepoIndex } from '../agent/tools.js';
 import { fileHistory, repoHistorySummary } from '../history/index.js';
@@ -42,6 +43,7 @@ const ExplainSchema = z.object({
   snippet: z.object({ text: z.string().min(1).max(20_000), startLine: z.number().int().optional(), endLine: z.number().int().optional() }).optional(),
   refresh: z.boolean().optional(),
 });
+const ReviewRequestSchema = z.object({ path: z.string().min(1).max(1000).optional(), refresh: z.boolean().optional() });
 const QuestionSchema = z.object({ question: z.string().min(1).max(1000), refresh: z.boolean().optional() });
 
 /** Run an agent task over SSE, forwarding its events until it finishes or the client leaves. */
@@ -302,6 +304,26 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const p = typeof req.query.path === 'string' ? req.query.path : '';
     const rows = db.prepare(`SELECT key, created_at FROM explanations WHERE repo_id=? AND (key = ? OR key LIKE ?)`).all(req.params.id, `file:${p}`, `sym:${p}#%`) as any[];
     res.json(rows.map((r) => ({ key: r.key, createdAt: r.created_at })));
+  });
+
+  // ---------- code review ----------
+  r.get('/repos/:id/reviews', (req, res) => {
+    if (!getRepo(req, res)) return;
+    res.json({ reviews: listReviews(db, req.params.id), running: { full: reviewRunning(req.params.id, null), files: runningFileReviews(req.params.id) } });
+  });
+
+  r.get('/repos/:id/review', (req, res) => {
+    if (!getRepo(req, res)) return;
+    const p = typeof req.query.path === 'string' && req.query.path ? req.query.path : null;
+    res.json(getReview(db, req.params.id, p));
+  });
+
+  r.post('/repos/:id/review', async (req, res) => {
+    const row = getRepo(req, res);
+    if (!row) return;
+    const parsed = ReviewRequestSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
+    await streamTask(res, (emit) => streamReview(db, llm, embeddings, row.id, parsed.data, emit));
   });
 
   r.post('/repos/:id/diagram/answer', async (req, res) => {

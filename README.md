@@ -118,12 +118,12 @@ clone (https only, bounded history) → scan (.gitignore, skip binaries/vendored
   → git history index (commits, per-file changes, renames)
   → LLM: per-file summaries (batched, cached by content hash)
   → LLM: per-category insights + suggested questions (results open here)
-  → LLM, in the background: architecture synthesis (components + connections with code evidence)
+  → LLM, in the background: architecture synthesis (components + connections with code evidence), then a full codebase review
   → SQLite knowledge base (+ symbol ranges and a cross-reference index for the agent's tools)
 ```
 
 - `server/` contains the Express 5 API, the ingestion pipeline (`src/ingest`), the analysis steps (`src/analyze`), retrieval and answering (`src/qa`), auth, and export/import. It uses SQLite via better-sqlite3 in a single file under `DATA_DIR`.
-- `server/src/agent/` holds the inspection tools (`tools.ts`), the file/symbol explainer (`explain.ts`) and "ask the diagram" (`diagram.ts`). `server/src/ingest/refs.ts` builds the cross-reference index (call sites, enclosing symbol, resolved target).
+- `server/src/agent/` holds the inspection tools (`tools.ts`), the file/symbol explainer (`explain.ts`), code review (`review.ts`) and "ask the diagram" (`diagram.ts`). `server/src/ingest/refs.ts` builds the cross-reference index (call sites, enclosing symbol, resolved target).
 - `server/src/llm/` holds the provider interface plus Anthropic (structured output via forced tool use), OpenAI (JSON-schema output) and an offline mock. Each provider also has a `runAgent` tool-use loop (`server/src/llm/agent.ts` handles budgets and submission validation). Every LLM step has a static-analysis fallback, so one failed call never fails the whole analysis.
 - `web/` is a React + Vite app: React Flow and ELK for the diagram, Shiki for code highlighting, and react-markdown for insights and answers.
 - `shared/` holds the types and zod schemas used by both sides, including the export format.

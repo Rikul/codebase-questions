@@ -263,6 +263,55 @@ export const DiagramAnswerSchema = z.object({
 export type DiagramAnswer = z.infer<typeof DiagramAnswerSchema>;
 export type DiagramEvent = AgentStreamEvent | { type: 'result'; answer: DiagramAnswer; cached: boolean };
 
+// ---------- Code review ----------
+
+export const REVIEW_SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'] as const;
+export type ReviewSeverity = (typeof REVIEW_SEVERITIES)[number];
+export const REVIEW_KINDS = ['bug', 'security', 'performance', 'reliability', 'maintainability', 'design', 'testing'] as const;
+
+export const ReviewFindingSchema = z.object({
+  severity: z.enum(REVIEW_SEVERITIES).catch('low'),
+  kind: z.enum(REVIEW_KINDS).catch('maintainability'),
+  title: z.string().describe('One line naming the problem'),
+  path: z.string().optional().describe('File the problem is in'),
+  startLine: z.number().int().optional(),
+  endLine: z.number().int().optional(),
+  detail: z.string().describe('Markdown: what is wrong, why it matters, and the evidence (cite [path:start-end])'),
+  suggestion: z.string().optional().describe('Markdown: a concrete fix'),
+});
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+export const ReviewSchema = z.object({
+  summaryMd: z.string().describe('Markdown overview: overall quality, the main risks, and what to fix first'),
+  strengths: z.array(z.string()).optional().describe('A few things the code does well'),
+  findings: z.array(ReviewFindingSchema).describe('Concrete problems, most severe first'),
+});
+export type Review = z.infer<typeof ReviewSchema>;
+
+/** Sidebar entry for a stored review: the full codebase review has no path. */
+export interface ReviewEntry {
+  path: string | null;
+  createdAt: string;
+  findings: number;
+  worst: ReviewSeverity | null;
+  /** File reviews only: the file changed since it was reviewed. */
+  stale?: boolean;
+}
+
+/** GET /api/repos/:id/reviews: stored reviews plus the ones running now. */
+export interface ReviewList {
+  reviews: ReviewEntry[];
+  running: { full: boolean; files: string[] };
+}
+
+export interface ReviewRequest {
+  /** File to review; omit for the full codebase review. */
+  path?: string;
+  refresh?: boolean;
+}
+
+export type ReviewEvent = AgentStreamEvent | { type: 'result'; path: string | null; review: Review; cached: boolean; createdAt: string };
+
 // ---------- Export format ----------
 
 export const EXPORT_FORMAT = 'codebase-questions/v1';
@@ -305,6 +354,7 @@ export const ExportSchema = z.object({
   /** Flows (sequence diagrams) were removed; still accepted so older exports import, but ignored. */
   flows: z.array(z.unknown()).optional(),
   explanations: z.array(z.object({ key: z.string(), fileHash: z.string(), content: z.string(), createdAt: z.string() })).optional(),
+  reviews: z.array(z.object({ key: z.string(), version: z.string(), content: z.string(), createdAt: z.string() })).optional(),
   history: z
     .object({
       commits: z.array(z.object({ sha: z.string(), seq: z.number(), author: z.string(), date: z.string(), subject: z.string(), body: z.string().nullable() })),
@@ -335,6 +385,7 @@ export const ANALYSIS_STEPS = [
   { id: 'insights', label: 'Write architecture, onboarding, security and API insights' },
   { id: 'store', label: 'Save insights and initial diagram' },
   { id: 'architecture', label: 'Synthesize and update architecture in background' },
+  { id: 'review', label: 'Review the codebase in background' },
 ] as const;
 
 export function analysisProgress(stage: string, fraction = 0): number {

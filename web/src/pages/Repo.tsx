@@ -11,6 +11,7 @@ import { Chat } from '../components/Chat';
 import { CommitModal } from '../components/CommitModal';
 import { FilesView, type FileTarget } from '../components/FilesView';
 import { InsightsView } from '../components/InsightsView';
+import { ReviewView } from '../components/ReviewView';
 import { useJobProgress } from './Home';
 
 const TABS = [
@@ -19,12 +20,13 @@ const TABS = [
   { id: 'security', label: `${CATEGORY_META.security.icon} Security` },
   { id: 'api', label: `${CATEGORY_META.api.icon} API & Libraries` },
   { id: 'ask', label: '✦ Ask' },
+  { id: 'review', label: '✓ Review' },
   { id: 'files', label: '▤ Files' },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
-// The last step runs after results are shown (repo status 'enriching'), when this view is gone.
-const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'architecture');
+// The last steps run after results are shown (repo status 'enriching'), when this view is gone.
+const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'architecture' && step.id !== 'review');
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
@@ -41,7 +43,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
             <li key={step.id} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{step.label}</li>
           ))}
         </ol>
-        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the architecture diagram is then refined in the background.</p>
+        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the architecture diagram is then refined and the code reviewed in the background.</p>
       </div>
     </div>
   );
@@ -85,6 +87,17 @@ export function Repo() {
       }),
     [setParams],
   );
+  const openReview = useCallback(
+    (path?: string) =>
+      setParams((p) => {
+        p.set('tab', 'review');
+        if (path) p.set('rpath', path);
+        else p.delete('rpath');
+        return p;
+      }),
+    [setParams],
+  );
+  const reviewPath = params.get('rpath');
   const [fPath, fLines, fSym, fSymLine] = ['path', 'lines', 'sym', 'symLine'].map((k) => params.get(k));
   const fileTarget = useMemo<FileTarget | null>(() => {
     if (!fPath) return null;
@@ -104,8 +117,9 @@ export function Repo() {
         },
         openCommit: (sha, path) => setCommit({ sha, path }),
         openFile: (p, symbol) => showFile({ path: p, symbol }),
+        openReview,
       },
-    [repo, setTab, showFile],
+    [repo, setTab, showFile, openReview],
   );
 
   if (error) return <div className="page"><div className="error-box">{error}</div><p><Link to="/">← Back</Link></p></div>;
@@ -152,7 +166,7 @@ export function Repo() {
           <Progress repo={repo} onDone={load} />
         ) : (
           <>
-            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis is running in the background; the diagram will update automatically.</div>}
+            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis and the code review are running in the background; the diagram and Review tab update automatically.</div>}
             {repo.status === 'failed' && <div className="error-box" style={{ margin: 12 }}>Analysis failed: {repo.error}</div>}
             {repo.status === 'ready' && repo.error && (
               <details className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>
@@ -174,6 +188,7 @@ export function Repo() {
                 </div>
               )}
               {tab === 'ask' && <Chat intent={intent} onIntentConsumed={() => setIntent(null)} />}
+              {tab === 'review' && <ReviewView path={reviewPath} />}
               {tab === 'files' && <FilesView target={fileTarget} />}
             </div>
           </>

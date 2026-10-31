@@ -8,6 +8,7 @@ import { answerQuestion, classifyHeuristic } from '../src/qa/answer.js';
 import { retrieve } from '../src/qa/retrieve.js';
 import { exportProject, importProject } from '../src/export/export.js';
 import { getArchitecture } from '../src/routes/queries.js';
+import { getReview, listReviews, reviewRunning, startReview, streamReview } from '../src/agent/review.js';
 
 const FIXTURE = path.join(import.meta.dirname, 'fixtures/sample-app');
 
@@ -72,6 +73,36 @@ describe('analysis pipeline (offline provider)', () => {
     expect(events.filter((e) => e.type === 'token').length).toBeGreaterThan(0);
   });
 
+  it('writes the full codebase review in the background step', () => {
+    const full = getReview(db, repoId, null);
+    expect(full?.review.summaryMd).toMatch(/Static review/);
+    expect(listReviews(db, repoId)[0]).toMatchObject({ path: null });
+  });
+
+  it('reviews a file and caches it by content hash', async () => {
+    const events: any[] = [];
+    await streamReview(db, llm, null, repoId, { path: 'src/routes/users.ts' }, (e) => events.push(e));
+    const result = events.find((e) => e.type === 'result');
+    expect(result).toMatchObject({ path: 'src/routes/users.ts', cached: false });
+    expect(events.some((e) => e.type === 'step')).toBe(true);
+    const again: any[] = [];
+    await streamReview(db, llm, null, repoId, { path: 'src/routes/users.ts' }, (e) => again.push(e));
+    expect(again).toEqual([expect.objectContaining({ type: 'result', cached: true })]);
+    expect(listReviews(db, repoId).map((e) => e.path)).toEqual([null, 'src/routes/users.ts']);
+    expect(listReviews(db, repoId)[1].stale).toBe(false);
+  });
+
+  it('lets a page that left and came back join a review in progress', async () => {
+    const run = startReview(db, llm, null, repoId, null);
+    expect(reviewRunning(repoId, null)).toBe(true);
+    // A second request while running joins the same run rather than starting another one.
+    expect(startReview(db, llm, null, repoId, null)).toBe(run);
+    const joined: any[] = [];
+    await streamReview(db, llm, null, repoId, {}, (e) => joined.push(e));
+    expect(joined.filter((e) => e.type === 'result')).toEqual([expect.objectContaining({ cached: false, path: null })]);
+    expect(reviewRunning(repoId, null)).toBe(false);
+  });
+
   it('round-trips through export and import', () => {
     const exp = exportProject(db, repoId, true);
     const json = JSON.parse(JSON.stringify(exp));
@@ -84,6 +115,7 @@ describe('analysis pipeline (offline provider)', () => {
     expect(ins(newId)).toEqual(ins(repoId));
     const convs = db.prepare('SELECT count(*) n FROM conversations WHERE repo_id=?').get(newId) as any;
     expect(convs.n).toBe(1);
+    expect(listReviews(db, newId).map((e) => e.path)).toEqual(listReviews(db, repoId).map((e) => e.path));
     expect(() => importProject(db, { format: 'nope' })).toThrow(/Invalid export file/);
   });
 });
@@ -113,8 +145,8 @@ describe('background architecture synthesis', () => {
     try {
       expect(count('insights')).toBeGreaterThan(0);
       expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('store'));
-      expect(progress[stages.indexOf('store')]).toBeCloseTo(7 / 9);
-      expect(progress[stages.indexOf('architecture')]).toBeCloseTo(8 / 9);
+      expect(progress[stages.indexOf('store')]).toBeCloseTo(7 / 10);
+      expect(progress[stages.indexOf('architecture')]).toBeCloseTo(8 / 10);
       expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
       // A user action performed while synthesis is running must survive its completion.
       db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background' AND category!='architecture'`).run();
@@ -124,6 +156,8 @@ describe('background architecture synthesis', () => {
       release();
     }
     const { architecture } = await analysis;
+    expect(stages.lastIndexOf('review')).toBeGreaterThan(stages.lastIndexOf('architecture'));
+    expect(count('reviews')).toBe(1);
     expect(architecture.overview).toBe('Background architecture complete');
     expect((db.prepare(`SELECT title FROM insights WHERE repo_id='background' AND category!='architecture' LIMIT 1`).get() as any).title).toBe('User-visible result');
     expect(count('diagram_answers')).toBe(0);

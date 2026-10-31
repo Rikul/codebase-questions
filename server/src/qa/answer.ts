@@ -1,5 +1,5 @@
 import type { AskEvent, AskRequest, Category, Citation } from '@cq/shared';
-import { CATEGORIES, CATEGORY_LABELS, defaultView, findConnection } from '@cq/shared';
+import { CATEGORIES, CATEGORY_LABELS, componentTitle, defaultView, findConnection } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
@@ -106,8 +106,8 @@ interface Focus {
 function resolveFocus(db: DB, repoId: string, focus: AskRequest['focus']): Focus {
   if (!focus) return { paths: [], text: '' };
   if (focus.componentId) {
-    const c = db.prepare('SELECT * FROM components WHERE repo_id=? AND id=?').get(repoId, focus.componentId) as any;
-    if (c) return { paths: json<string[]>(c.paths, []), text: `The user is asking about the component "${c.name}" (${c.type}): ${c.description}` };
+    const c = getArchitecture(db, repoId).components.find((x) => x.id === focus.componentId);
+    if (c) return { paths: c.paths, text: `The user is asking about the component "${componentTitle(c)}" (${c.type}): ${c.summary ?? c.description}` };
   }
   if (focus.connectionId) {
     const e = findConnection(getArchitecture(db, repoId), focus.connectionId);
@@ -166,7 +166,7 @@ export async function* answerQuestion(
   const context = [
     `# Repository: ${repo.name} (${repo.url}${repo.commit_sha ? ` @ ${repo.commit_sha.slice(0, 10)}` : ''})`,
     repo.overview ? `## Architecture overview\n${String(repo.overview).slice(0, 3000)}` : '',
-    comps.length ? `## Components\n${comps.map((c) => `- ${c.id}: ${c.name} [${c.type}] (${c.paths.join(', ') || 'external'}) — ${c.description}`).join('\n')}` : '',
+    comps.length ? `## Components\n${comps.map((c) => `- ${c.id}: ${componentTitle(c)} [${c.type}] (${c.paths.join(', ') || 'external'}) — ${c.summary ?? c.description}`).join('\n')}` : '',
     conns.length ? `## Connections\n${conns.map((e) => `- ${e.from} → ${e.to} [${e.kind}] ${e.label}`).join('\n')}` : '',
     insights.length ? `## Knowledge base: ${CATEGORY_LABELS[category]}\n${insights.map((i) => `### ${i.title}${i.severity ? ` (${i.severity})` : ''}\n${String(i.body_md).slice(0, 1500)}`).join('\n\n').slice(0, 9000)}` : '',
     sums.length ? `## File summaries\n${sums.map((s) => `- ${s.path}: ${s.summary ?? ''}`).join('\n')}` : '',

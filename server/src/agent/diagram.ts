@@ -1,5 +1,5 @@
 import type { Architecture, DiagramAnswer, DiagramEvent } from '@cq/shared';
-import { DiagramAnswerSchema, defaultView, findConnection } from '@cq/shared';
+import { DiagramAnswerSchema, componentTitle, defaultView, findConnection } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { AGENT_GUIDANCE } from '../llm/agent.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
@@ -33,7 +33,7 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
       {
         role: 'user',
         content: [
-          `# Diagram components\n${arch.components.map((c) => `- ${c.id}: ${c.name} [${c.type}] ${c.paths.join(', ')} — ${c.description.slice(0, 160)}`).join('\n')}`,
+          `# Diagram components\n${arch.components.map((c) => `- ${c.id}: ${componentTitle(c)} [${c.type}] ${c.paths.join(', ')} — ${(c.summary ?? c.description).slice(0, 160)}`).join('\n')}`,
           `# Diagram connections\n${arch.connections.map((e) => `- ${e.id}: ${e.from} → ${e.to} [${e.kind}] ${e.label}`).join('\n')}`,
           `Question: ${q}`,
         ]
@@ -51,7 +51,7 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
       await call('search_code', { query: q, limit: 4 });
       const words = q.toLowerCase().split(/\W+/).filter((w) => w.length > 2);
       const score = (t: string) => words.filter((w) => t.toLowerCase().includes(w)).length;
-      const comps = arch.components.filter((c) => score(`${c.name} ${c.description} ${c.paths.join(' ')}`) > 0).map((c) => c.id);
+      const comps = arch.components.filter((c) => score(`${c.name} ${c.label ?? ''} ${c.summary ?? ''} ${c.description} ${c.paths.join(' ')}`) > 0).map((c) => c.id);
       return {
         final: {
           answerMd: comps.length ? `Components related to the question: ${comps.map((c) => `**${arch.components.find((x) => x.id === c)!.name}**`).join(', ')}.` : 'No matching part of the diagram was found by keyword. Configure an LLM for investigated answers.',

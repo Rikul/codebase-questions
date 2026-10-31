@@ -10,6 +10,7 @@ import { clearAnalysis } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import { startReview } from '../agent/review.js';
 import { staticArchitecture } from '../analyze/architecture.js';
+import { annotateComponents } from '../analyze/labels.js';
 import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
@@ -280,7 +281,11 @@ export async function analyzeDirectory(
     }
   })();
 
-  const { architecture: arch, owner: fileComp } = staticArchitecture(ctx);
+  const { architecture: staticArch, owner: fileComp } = staticArchitecture(ctx);
+  // Readable labels for the static components (names and structure stay as found in the code).
+  progress('insights', 'Naming diagram components', 0);
+  ctx.progress = (m) => progress('insights', m, 0);
+  const arch = await annotateComponents(ctx, staticArch, config.llm.concurrency);
 
   progress('insights', 'Writing architecture, onboarding, security and API insights', 0);
   ctx.progress = (m, p) => progress('insights', m, p);

@@ -140,3 +140,40 @@ describe('static architecture from the sample app', () => {
     expect(b.connections.map((e) => e.weight)).toEqual(a.connections.map((e) => e.weight));
   });
 });
+
+describe('LLM component labels', () => {
+  it('adds labels and summaries next to the static names', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('l', 'acme/sample-app', 'https://github.com/acme/sample-app', 'running')`).run();
+    const mock = new MockProvider();
+    const llm = Object.create(mock) as import('../src/llm/provider.js').LLMProvider;
+    Object.defineProperty(llm, 'name', { value: 'test' });
+    let asked: string[] = [];
+    llm.completeJSON = async <T,>(opts: import('../src/llm/provider.js').JSONOptions<T>): Promise<T> => {
+      if (opts.name !== 'component_labels') return mock.completeJSON(opts);
+      const text = String(opts.messages[0].content);
+      asked = [...text.matchAll(/^- id: (\S+)/gm)].map((m) => m[1]);
+      const [first, second] = asked;
+      const staticName = text.match(new RegExp(`- id: ${second}\\n  static name: (.+)`))![1];
+      return opts.schema.parse({
+        components: [
+          { id: first, label: 'Request Handling', summary: 'Handles requests.' },
+          { id: second, label: staticName, summary: 'Same name.' },
+          { id: 'not-a-component', label: 'Ghost', summary: 'x' },
+        ],
+      });
+    };
+    await analyzeDirectory(db, llm, null, 'l', FIXTURE, () => undefined);
+    const arch = getArchitecture(db, 'l');
+    const [first, second] = asked;
+    const a = arch.components.find((c) => c.id === first)!;
+    expect(a).toMatchObject({ label: 'Request Handling', summary: 'Handles requests.' });
+    expect(a.name).not.toBe('Request Handling');
+    // A label that only repeats the static name is dropped; the summary is kept.
+    expect(arch.components.find((c) => c.id === second)).toMatchObject({ summary: 'Same name.' });
+    expect(arch.components.find((c) => c.id === second)!.label).toBeUndefined();
+    // External systems are not sent for labelling.
+    expect(asked.every((id) => arch.components.find((c) => c.id === id)!.paths.length > 0 || arch.components.some((c) => c.parentId === id))).toBe(true);
+    db.close();
+  });
+});

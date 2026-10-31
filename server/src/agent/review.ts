@@ -1,5 +1,6 @@
 import type { Review, ReviewEntry, ReviewEvent, ReviewFinding, ReviewSeverity } from '@cq/shared';
-import { REVIEW_SEVERITIES, ReviewSchema } from '@cq/shared';
+import { REVIEW_SEVERITIES, ReviewSchema, componentTitle, defaultView } from '@cq/shared';
+import { getArchitecture } from '../routes/queries.js';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import { AGENT_GUIDANCE } from '../llm/agent.js';
@@ -118,7 +119,7 @@ function clean(ix: RepoIndex, review: Review): Review {
 
 function fullContext(db: DB, repoId: string): string {
   const repo = db.prepare('SELECT name, overview FROM repos WHERE id=?').get(repoId) as { name: string; overview: string | null };
-  const comps = db.prepare('SELECT id, name, type, paths, description FROM components WHERE repo_id=?').all(repoId) as any[];
+  const comps = defaultView(getArchitecture(db, repoId)).components;
   const files = db.prepare('SELECT path, lines, summary, meta FROM files WHERE repo_id=?').all(repoId) as FileRow[];
   const scored = files.map((f) => {
     const m = json<any>(f.meta, {});
@@ -136,7 +137,7 @@ function fullContext(db: DB, repoId: string): string {
   return [
     `Repository: ${repo.name}`,
     repo.overview ? `# Architecture overview\n${repo.overview.slice(0, 3000)}` : '',
-    comps.length ? `# Components\n${comps.map((c) => `- ${c.name} [${c.type}] (${json<string[]>(c.paths, []).join(', ') || 'external'}): ${String(c.description).slice(0, 200)}`).join('\n')}` : '',
+    comps.length ? `# Components\n${comps.map((c) => `- ${componentTitle(c)} [${c.type}] (${c.paths.join(', ') || 'external'}): ${(c.summary ?? c.description).slice(0, 200)}`).join('\n')}` : '',
     `# Size\n${files.length} files, ${tests} test files.`,
     routes.length ? `# HTTP routes\n${routes.join('\n')}` : '',
     signals.length ? `# Static security signals (regex; may be false positives)\n${signals.join('\n')}` : '',

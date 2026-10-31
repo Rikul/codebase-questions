@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Architecture, Category, Insight, SuggestedQuestion } from '@cq/shared';
-import { CATEGORY_LABELS } from '@cq/shared';
+import { CATEGORY_LABELS, componentTitle } from '@cq/shared';
 import { jsonWithFallback } from '../llm/index.js';
 import type { RepoContext } from './context.js';
 import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, packageScripts, readmeIntro, truncate } from './context.js';
@@ -37,7 +37,7 @@ const GUIDES: Record<Category, string> = {
 
 function categoryFacts(ctx: RepoContext, cat: Category, arch: Architecture): string {
   const routes = allRoutes(ctx);
-  const comps = arch.components.map((c) => `- ${c.name} [${c.type}] (${c.paths.join(', ') || 'external'}): ${c.description}`).join('\n');
+  const comps = arch.components.map((c) => `- ${componentTitle(c)} [${c.type}] (${c.paths.join(', ') || 'external'}): ${c.summary ?? c.description}`).join('\n');
   const conns = arch.connections.map((e) => `- ${e.from} -> ${e.to} [${e.kind}] ${e.label}: ${e.description}`).join('\n');
   const keyFiles = [...ctx.summaries.entries()]
     .filter(([p]) => isCode(ctx.fileByPath.get(p)!))
@@ -164,7 +164,7 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
     out.push({
       kind: 'components',
       title: 'Components',
-      bodyMd: arch.components.map((c) => `- **${c.name}** (${c.type}) ${c.paths.length ? `— \`${c.paths.join('`, `')}\`` : ''}: ${c.description}`).join('\n'),
+      bodyMd: arch.components.map((c) => `- **${componentTitle(c)}** (${c.type}) ${c.paths.length ? `— \`${c.paths.join('`, `')}\`` : ''}: ${c.description}`).join('\n'),
       refs: [],
     });
     const top = [...ctx.centrality.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -188,7 +188,7 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
     out.push({
       kind: 'overview',
       title: 'What this project is',
-      bodyMd: ctx.readme ? `${readmeIntro(ctx.readme, 1200)}\n\nThe codebase has ${ctx.files.length} files; the main components are ${arch.components.filter((c) => c.paths.length).map((c) => `**${c.name}**`).join(', ')}.` : `No README found. ${arch.overview}`,
+      bodyMd: ctx.readme ? `${readmeIntro(ctx.readme, 1200)}\n\nThe codebase has ${ctx.files.length} files; the main components are ${arch.components.filter((c) => c.paths.length).map((c) => `**${componentTitle(c)}**`).join(', ')}.` : `No README found. ${arch.overview}`,
       refs: ctx.readme ? [ref(ctx.files.find((f) => /^readme/i.test(f.path))?.path ?? 'README.md')] : [],
     });
     const manifests = [...new Set(ctx.deps.map((d) => d.manifest))];

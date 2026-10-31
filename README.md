@@ -39,7 +39,7 @@ If history is truncated (shallow clone), creation dates are shown as "on or befo
 
 ### Architecture diagram from the code
 
-- **Built by static analysis.** The diagram is deterministic: no LLM invents or merges components. Packages (from `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml` and similar manifests) become containers, with their modules and subdirectories inside.
+- **Built by static analysis.** The diagram is deterministic: no LLM invents or merges components. With a model configured, each box also gets a short readable label and summary (the static name, e.g. `github.com/acme/app/v2`, stays underneath). Packages (from `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml` and similar manifests) become containers, with their modules and subdirectories inside.
 - **Expand in place.** Click ⊕ (or double-click) to open a component and see what is inside; ⊖ collapses it again. A component with nothing inside opens its file-level import graph.
 - **Real connections.** Arrows are imports between components (thicker for more imports), HTTP calls matched from client code (`fetch('/api/users')`) to the server routes that handle them, and use of databases, queues and other services. Each arrow links to the lines of code behind it.
 - **Less clutter.** Imports into modules used by most of the code (helpers, shared types) and edges already implied by a longer path are hidden by default; toolbar toggles bring them back.

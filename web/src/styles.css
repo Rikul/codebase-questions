@@ -371,6 +371,7 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .node-toggle { border: 1px solid var(--border); background: var(--surface); color: var(--text-2); border-radius: 6px; width: 20px; height: 20px; line-height: 16px; padding: 0; cursor: pointer; font-size: 13px; flex: none; }
 .node-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .comp-node .node-toggle { float: right; margin: -3px 0 0 6px; }
+.comp-node .static-name { font-family: var(--mono); font-size: 11px; }
 .comp-node .used-by { margin-top: 4px; font-size: 11px; color: var(--text-3); font-style: italic; }
 .react-flow__node-group { background: transparent !important; border: 0 !important; padding: 0 !important; }
 .comp-node .layer { float: right; font-weight: 600; color: var(--text-3); letter-spacing: .04em; }

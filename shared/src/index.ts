@@ -59,6 +59,10 @@ export const ComponentSchema = z.object({
   parentId: z.string().optional(),
   /** Shown opened up (as a container of its children) when the diagram first loads. */
   expandByDefault: z.boolean().optional(),
+  /** Readable name written by the LLM (the static `name` stays as the identifier shown beside it). */
+  label: z.string().optional(),
+  /** One-sentence LLM summary of what the component does. */
+  summary: z.string().optional(),
   keyFiles: z.array(z.string()).optional(),
   entryPoints: z.array(z.string()).optional(),
   techStack: z.array(z.string()).optional(),

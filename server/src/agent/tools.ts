@@ -398,7 +398,7 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
       run: async () => {
         const a = defaultView(getArchitecture(ix.db, ix.repoId));
         return {
-          components: a.components.map((c) => ({ id: c.id, name: c.name, type: c.type, paths: c.paths, description: c.description, parentId: c.parentId })),
+          components: a.components.map((c) => ({ id: c.id, name: c.name, label: c.label, type: c.type, paths: c.paths, summary: c.summary, description: c.description, parentId: c.parentId })),
           connections: a.connections.map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, label: e.label, evidence: e.evidence.slice(0, 3) })),
         };
       },

@@ -44,7 +44,7 @@ const CompNode = memo(({ data }: NodeProps<Node<CompData>>) => {
     <div
       className={`comp-node ${comp.type} ${dim ? 'dim' : ''} ${selected ? 'selected' : ''} ${lit ? 'lit' : ''}`}
       style={{ ['--node-color' as string]: TYPE_COLORS[comp.type] ?? TYPE_COLORS.other }}
-      title={comp.description}
+      title={[comp.label ? `${comp.label} — ${comp.name}` : comp.name, comp.summary, comp.description].filter(Boolean).join('\n')}
     >
       <Handle type="target" position={tp} />
       <div className="t">
@@ -54,8 +54,9 @@ const CompNode = memo(({ data }: NodeProps<Node<CompData>>) => {
           <button className="node-toggle nodrag" title="Expand: show what is inside" onClick={(e) => { e.stopPropagation(); onToggle(comp.id); }}>⊕</button>
         )}
       </div>
-      <div className="n">{comp.name}</div>
-      <div className="d">{comp.paths.length ? comp.paths.join(', ') : comp.techStack?.length ? comp.techStack.slice(0, 3).join(' · ') : comp.description}</div>
+      {/* LLM label as the title, with the static name (as found in the code) underneath. */}
+      <div className="n">{comp.label ?? comp.name}</div>
+      <div className="d">{comp.label ? <span className="static-name">{comp.name}</span> : comp.paths.length ? comp.paths.join(', ') : comp.techStack?.length ? comp.techStack.slice(0, 3).join(' · ') : comp.description}</div>
       {usedBy > 0 && <div className="used-by" title="Imports into this widely used module are hidden; use “Shared-module edges” to show them">used by {usedBy} modules</div>}
       <Handle type="source" position={sp} />
     </div>
@@ -66,12 +67,12 @@ const GroupNode = memo(({ data }: NodeProps<Node<GroupData>>) => {
   const { comp, dir, dim, selected, onToggle } = data;
   const [tp, sp] = dir === 'RIGHT' ? [Position.Left, Position.Right] : [Position.Top, Position.Bottom];
   return (
-    <div className={`group-node ${dim ? 'dim' : ''} ${selected ? 'selected' : ''}`} style={{ ['--node-color' as string]: TYPE_COLORS[comp.type] ?? TYPE_COLORS.other }} title={comp.description}>
+    <div className={`group-node ${dim ? 'dim' : ''} ${selected ? 'selected' : ''}`} style={{ ['--node-color' as string]: TYPE_COLORS[comp.type] ?? TYPE_COLORS.other }} title={[comp.summary, comp.description].filter(Boolean).join('\n')}>
       <Handle type="target" position={tp} />
       <div className="group-head">
         <button className="node-toggle nodrag" title="Collapse" onClick={(e) => { e.stopPropagation(); onToggle(comp.id); }}>⊖</button>
-        <b>{comp.name}</b>
-        <span className="muted">{comp.paths[0] ?? ''}</span>
+        <b>{comp.label ?? comp.name}</b>
+        <span className="muted">{comp.label ? comp.name : comp.paths[0] ?? ''}</span>
       </div>
       <Handle type="source" position={sp} />
     </div>
@@ -468,6 +469,7 @@ function Diagram({ arch }: { arch: Architecture }) {
   );
 
   const types = [...new Set(arch.components.map((c) => c.type))];
+  const title = (id: string) => { const c = arch.components.find((x) => x.id === id); return c ? c.label ?? c.name : id; };
   // Panels describe what is on screen: visible components and the edges between them.
   const shownArch: Architecture = useMemo(() => ({ overview: arch.overview, components: visible.comps, connections: visible.conns }), [arch.overview, visible]);
   const comp = sel?.kind === 'component' ? visible.comps.find((c) => c.id === sel.id) : undefined;
@@ -481,7 +483,7 @@ function Diagram({ arch }: { arch: Architecture }) {
             <div className="card">
               <button className="btn sm ghost" onClick={() => setDrill(null)}>← All components</button>
               <span className="small" style={{ padding: '0 8px' }}>
-                Files in <b>{drill.name}</b>. Click a file to read it, or an edge to see the import.
+                Files in <b>{drill.label ?? drill.name}</b>. Click a file to read it, or an edge to see the import.
               </span>
             </div>
           ) : (
@@ -617,7 +619,7 @@ function Diagram({ arch }: { arch: Architecture }) {
                       {tour.map((t, i) => (
                         <li key={i} className={tourIdx === i ? 'active' : ''}>
                           <button className="plain-btn" onClick={() => setTourIdx(i)}>
-                            <b>{t.componentId ? arch.components.find((c) => c.id === t.componentId)?.name : (() => { const e = visible.conns.find((c) => c.id === shownEdge(t.connectionId ?? '')); return e ? `${arch.components.find((c) => c.id === e.from)?.name} → ${arch.components.find((c) => c.id === e.to)?.name}` : ''; })()}</b>
+                            <b>{t.componentId ? title(t.componentId) : (() => { const e = visible.conns.find((c) => c.id === shownEdge(t.connectionId ?? '')); return e ? `${title(e.from)} → ${title(e.to)}` : ''; })()}</b>
                             <div className="small muted">{t.caption}</div>
                           </button>
                         </li>

@@ -27,6 +27,9 @@ export interface ArchView {
   visibleOf: Map<string, string>;
 }
 
+/** "Label (static name)" when the LLM labelled the component, else the static name. */
+export const componentTitle = (c: { name: string; label?: string }) => (c.label ? `${c.label} (${c.name})` : c.name);
+
 export const connectionId = (from: string, to: string, kind: ConnectionKind | string) => (kind === 'calls' ? `${from}--${to}` : `${from}--${to}~${kind}`);
 
 export function childIndex(arch: Architecture): Map<string, Component[]> {
@@ -86,7 +89,7 @@ export function viewArchitecture(arch: Architecture, expanded: Set<string>): Arc
     for (let p = byId.get(b)?.parentId; p; p = byId.get(p)?.parentId) if (p === a) return true;
     return false;
   };
-  const name = (id: string) => byId.get(id)?.name ?? id;
+  const name = (id: string) => byId.get(id)?.label ?? byId.get(id)?.name ?? id;
   const groups = new Map<string, { from: string; to: string; kind: string; items: Connection[] }>();
   for (const e of arch.connections) {
     const from = visibleOf.get(e.from);
@@ -151,7 +154,7 @@ export function findConnection(arch: Architecture, id: string): ViewConnection |
     const items = arch.connections.filter((e) => e.kind === kind && a.has(e.from) && b.has(e.to));
     if (!items.length) return null;
     const byId = new Map(arch.components.map((c) => [c.id, c]));
-    return merge(items, from, to, kind, (x) => byId.get(x)?.name ?? x);
+    return merge(items, from, to, kind, (x) => byId.get(x)?.label ?? byId.get(x)?.name ?? x);
   }
   return null;
 }

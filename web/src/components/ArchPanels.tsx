@@ -42,7 +42,7 @@ export function OverviewPanel({
           {arch.components.map((c) => (
             <button key={c.id} className="link-row" onClick={() => onSelect(c.id)}>
               <i style={{ width: 9, height: 9, borderRadius: 3, background: TYPE_COLORS[c.type] }} />
-              <span className="grow">{c.name}</span>
+              <span className="grow">{c.label ?? c.name}{c.label && <span className="muted small"> · {c.name}</span>}</span>
               <span className="muted small">{c.type}</span>
             </button>
           ))}
@@ -80,13 +80,16 @@ export function ComponentPanel({
     setFiles(null);
     api<{ files: any[] }>(`/repos/${repo.id}/components/${encodeURIComponent(comp.id)}`).then((r) => setFiles(r.files), () => setFiles([]));
   }, [repo.id, comp.id]);
-  const name = (id: string) => arch.components.find((c) => c.id === id)?.name ?? id;
+  const name = (id: string) => { const c = arch.components.find((x) => x.id === id); return c ? c.label ?? c.name : id; };
   const outgoing = arch.connections.filter((e) => e.from === comp.id);
   const incoming = arch.connections.filter((e) => e.to === comp.id);
-  const focus = { componentId: comp.id, label: comp.name };
+  const title = comp.label ?? comp.name;
+  const focus = { componentId: comp.id, label: title };
   return (
-    <PanelShell kicker={comp.type} color={TYPE_COLORS[comp.type]} title={comp.name} onClose={onClose}>
-      <div className="md">{comp.description}</div>
+    <PanelShell kicker={comp.type} color={TYPE_COLORS[comp.type]} title={title} onClose={onClose}>
+      {comp.label && <div className="small muted">Static name: <code>{comp.name}</code></div>}
+      {comp.summary && <div className="md">{comp.summary}</div>}
+      <div className={comp.summary ? 'md small muted' : 'md'}>{comp.description}</div>
       {comp.paths.length > 0 && (
         <div className="row" style={{ flexWrap: 'wrap' }}>
           {comp.paths.map((p) => <code key={p}>{p}/</code>)}
@@ -147,12 +150,12 @@ export function ComponentPanel({
         );
       })()}
       <section>
-        <h4>Ask about {comp.name}</h4>
+        <h4>Ask about {title}</h4>
         <div className="suggest">
-          <button onClick={() => askAbout({ focus, category: 'architecture', question: `What is ${comp.name} responsible for and how does it interact with the rest of the system?`, autoSend: true })}>How does it fit in?</button>
-          <button onClick={() => askAbout({ focus, category: 'onboarding', question: `Where should I start reading to understand ${comp.name}?`, autoSend: true })}>Where do I start reading?</button>
-          <button onClick={() => askAbout({ focus, category: 'security', question: `What are the security risks in ${comp.name}?`, autoSend: true })}>Security risks</button>
-          <button onClick={() => askAbout({ focus, category: 'api', question: `What interfaces does ${comp.name} expose and how do I use them?`, autoSend: true })}>How do I use its API?</button>
+          <button onClick={() => askAbout({ focus, category: 'architecture', question: `What is ${title} responsible for and how does it interact with the rest of the system?`, autoSend: true })}>How does it fit in?</button>
+          <button onClick={() => askAbout({ focus, category: 'onboarding', question: `Where should I start reading to understand ${title}?`, autoSend: true })}>Where do I start reading?</button>
+          <button onClick={() => askAbout({ focus, category: 'security', question: `What are the security risks in ${title}?`, autoSend: true })}>Security risks</button>
+          <button onClick={() => askAbout({ focus, category: 'api', question: `What interfaces does ${title} expose and how do I use them?`, autoSend: true })}>How do I use its API?</button>
           <button onClick={() => askAbout({ focus })}>Ask my own…</button>
         </div>
       </section>
@@ -223,9 +226,9 @@ export function ConnectionPanel({ conn, arch, onClose, onSelectComponent }: { co
   return (
     <PanelShell kicker={`${conn.kind} connection`} title={label} onClose={onClose}>
       <div className="row">
-        <button className="btn sm" onClick={() => onSelectComponent(conn.from)}>{from?.name}</button>
+        <button className="btn sm" onClick={() => onSelectComponent(conn.from)}>{from?.label ?? from?.name}</button>
         <span className="muted">→ {conn.label} →</span>
-        <button className="btn sm" onClick={() => onSelectComponent(conn.to)}>{to?.name}</button>
+        <button className="btn sm" onClick={() => onSelectComponent(conn.to)}>{to?.label ?? to?.name}</button>
       </div>
       <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
         {conn.confidence && <span className={`chip ${conn.confidence === 'verified' ? 'ok' : 'warn'}`}>{conn.confidence === 'verified' ? '✓ verified in code' : '? inferred, not verified'}</span>}
@@ -243,9 +246,9 @@ export function ConnectionPanel({ conn, arch, onClose, onSelectComponent }: { co
       <section>
         <h4>Ask about this interaction</h4>
         <div className="suggest">
-          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'architecture', question: `How exactly does ${from?.name} talk to ${to?.name}? Walk through the call path.`, autoSend: true })}>Walk through the call path</button>
-          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'api', question: `What data is passed between ${from?.name} and ${to?.name}, and how are errors handled?`, autoSend: true })}>Data & error handling</button>
-          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'security', question: `Is the boundary between ${from?.name} and ${to?.name} a trust boundary? What could go wrong?`, autoSend: true })}>Trust boundary?</button>
+          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'architecture', question: `How exactly does ${from?.label ?? from?.name} talk to ${to?.label ?? to?.name}? Walk through the call path.`, autoSend: true })}>Walk through the call path</button>
+          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'api', question: `What data is passed between ${from?.label ?? from?.name} and ${to?.label ?? to?.name}, and how are errors handled?`, autoSend: true })}>Data & error handling</button>
+          <button onClick={() => askAbout({ focus: { connectionId: conn.id, label }, category: 'security', question: `Is the boundary between ${from?.label ?? from?.name} and ${to?.label ?? to?.name} a trust boundary? What could go wrong?`, autoSend: true })}>Trust boundary?</button>
         </div>
       </section>
       <section>

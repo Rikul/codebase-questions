@@ -132,26 +132,3 @@ describe('agent features', () => {
     expect(r2.answer.tour).toEqual([]);
   });
 });
-
-import { normalize } from '../src/analyze/architecture.js';
-describe('architecture normalization', () => {
-  it('downgrades connections whose evidence does not exist to inferred, and keeps extra fields', () => {
-    const files = [{ path: 'src/a.ts', lines: 10 }, { path: 'src/b.ts', lines: 10 }] as any[];
-    const facts = new Map([['src/a.ts', { imports: [], infra: [{ line: 3, kind: 'db:postgres', detail: 'query' }] }]]);
-    const ctx = { files, fileByPath: new Map(files.map((f) => [f.path, f])), facts } as any;
-    const arch = normalize(ctx, {
-      overview: 'o',
-      components: [
-        { id: 'a', name: 'A', type: 'service', description: 'd', responsibilities: [], paths: ['src/a.ts'], layer: 'core', group: 'api' },
-        { id: 'b', name: 'B', type: 'database', description: 'd', responsibilities: [], paths: [] },
-      ],
-      connections: [
-        { from: 'a', to: 'b', kind: 'db', label: 'SQL', description: 'x', evidence: [{ path: 'src/a.ts', startLine: 3 }], protocol: 'SQL', sync: 'sync' },
-        { from: 'b', to: 'a', kind: 'calls', label: 'y', description: 'y', evidence: [{ path: 'nope.ts', startLine: 1 }] },
-      ],
-    });
-    expect(arch.components[0]).toMatchObject({ layer: 'core', group: 'api' });
-    expect(arch.connections[0]).toMatchObject({ confidence: 'verified', protocol: 'SQL' });
-    expect(arch.connections[1]).toMatchObject({ confidence: 'inferred', evidence: [] });
-  });
-});

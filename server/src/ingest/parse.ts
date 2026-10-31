@@ -27,6 +27,8 @@ export interface FileFacts {
   security: SignalRef[];
   /** Infrastructure touch points: db, cache, queue, http clients, etc. */
   infra: SignalRef[];
+  /** URL paths this file calls (string literals such as fetch('/api/users')), matched to routes later. */
+  httpCalls: { path: string; line: number }[];
   isEntry: boolean;
   isTest: boolean;
 }
@@ -133,6 +135,12 @@ const SYMBOL_PATTERNS: Record<string, { re: RegExp; kind: string }[]> = {
   ],
 };
 
+/** A call whose first argument is a URL path literal: fetch('/api/x'), api(`/repos/${id}`), requests.get(f"{BASE}/x"). */
+const HTTP_CALL = /([\w$.]+)\s*(?:<[^<>()]*>)?\(\s*f?(['"`])((?:\$?\{[^}]*\})?\/[^'"`\s]*)\2/g;
+/** Callees that take paths but are not API calls (navigation, files, string helpers, imports). */
+const NOT_HTTP_CALLEE = /(?:^|\.)(?:require|import|navigate|push|replace|redirect|Link|href|route|join|resolve|relative|startsWith|endsWith|includes|test|match|split|readFile\w*|sendFile|static|existsSync|open|glob|use)$/i;
+const ASSET_PATH = /\.(?:png|jpe?g|gif|svg|ico|webp|css|scss|js|mjs|map|html?|woff2?|ttf|txt|md|json)(?:$|\?)/i;
+
 const ROUTE_PATTERNS: RegExp[] = [
   // express / koa / fastify / hono style: app.get('/x', ...), router.post("/y")
   /(?:\b[\w$]*(?:app|router|server|api|routes?|fastify)|\b(?:r|e|g|mux))\.(get|post|put|patch|delete|options|head|all|use)\(\s*['"`]([^'"`]+)['"`]/i,
@@ -210,7 +218,7 @@ export function isEntryPath(p: string, content: string): boolean {
 
 export function parseFile(p: string, lang: string | null, content: string): FileFacts {
   const fam = langFamily(lang);
-  const facts: FileFacts = { imports: [], symbols: [], routes: [], envVars: [], security: [], infra: [], isEntry: false, isTest: isTestPath(p) };
+  const facts: FileFacts = { imports: [], symbols: [], routes: [], envVars: [], security: [], infra: [], httpCalls: [], isEntry: false, isTest: isTestPath(p) };
   const text = content.length > 300_000 ? content.slice(0, 300_000) : content;
 
   if (fam) {
@@ -255,6 +263,15 @@ export function parseFile(p: string, lang: string | null, content: string): File
       if (method.toLowerCase() === 'use' && !String(route).startsWith('/')) return;
       if (!route && !/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return;
       facts.routes.push({ method: method.toUpperCase(), path: route || `/${p.replace(/\/route\.\w+$/, '')}`, line });
+    });
+  }
+  if ((fam === 'js' || fam === 'python') && !facts.isTest) {
+    const routeLines = new Set(facts.routes.map((r) => r.line));
+    const srcLines = text.split('\n');
+    allMatches(text, HTTP_CALL, (m, line) => {
+      if (routeLines.has(line) || NOT_HTTP_CALLEE.test(m[1]) || ASSET_PATH.test(m[3])) return;
+      if (/^\s*(\/\/|\/?\*|#)/.test(srcLines[line - 1] ?? '')) return; // examples in comments
+      facts.httpCalls.push({ path: m[3].replace(/^(?:\$?\{[^}]*\})/, ''), line });
     });
   }
   // Inline route handlers become pseudo-symbols so call sites inside them have a meaningful "caller".

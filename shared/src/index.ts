@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export * from './archView';
+
 export const CATEGORIES = ['architecture', 'onboarding', 'security', 'api'] as const;
 export const CategorySchema = z.enum(CATEGORIES);
 export type Category = z.infer<typeof CategorySchema>;
@@ -50,10 +52,13 @@ export const ComponentSchema = z.object({
   description: z.string(),
   responsibilities: z.array(z.string()).default([]),
   paths: z.array(z.string()).default([]),
-  // Richer, LLM-derived fields (optional so older exports still load).
+  // Optional so older exports still load.
   layer: LayerSchema.optional(),
   group: z.string().optional(),
+  /** Enclosing component (package → module → directory). */
   parentId: z.string().optional(),
+  /** Shown opened up (as a container of its children) when the diagram first loads. */
+  expandByDefault: z.boolean().optional(),
   keyFiles: z.array(z.string()).optional(),
   entryPoints: z.array(z.string()).optional(),
   techStack: z.array(z.string()).optional(),
@@ -73,6 +78,8 @@ export const ConnectionSchema = z.object({
   dataExchanged: z.string().optional(),
   direction: z.enum(['request', 'response', 'bidirectional']).optional(),
   confidence: z.enum(['verified', 'inferred']).optional(),
+  /** How many links (imports, API calls) this connection stands for. */
+  weight: z.number().optional(),
 });
 export type Connection = z.infer<typeof ConnectionSchema>;
 
@@ -383,8 +390,7 @@ export const ANALYSIS_STEPS = [
   { id: 'history', label: 'Index git history' },
   { id: 'summarize', label: 'Summarize key files with the LLM' },
   { id: 'insights', label: 'Write architecture, onboarding, security and API insights' },
-  { id: 'store', label: 'Save insights and initial diagram' },
-  { id: 'architecture', label: 'Synthesize and update architecture in background' },
+  { id: 'store', label: 'Save insights and architecture diagram' },
   { id: 'review', label: 'Review the codebase in background' },
 ] as const;
 

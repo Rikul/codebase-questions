@@ -32,13 +32,10 @@ export function OverviewPanel({
   onSelect: (id: string) => void;
   onAsk: (question: string) => void;
 }) {
-  const verified = arch.connections.filter((c) => c.confidence === 'verified').length;
   return (
     <PanelShell kicker="Architecture" title="System overview" onClose={onClose}>
       <Markdown>{arch.overview || '_No overview available._'}</Markdown>
-      {arch.connections.some((c) => c.confidence) && (
-        <div className="muted small">{verified} of {arch.connections.length} connections were verified against the code. Dotted arrows marked “?” are inferred.</div>
-      )}
+      <div className="muted small">Built from the code itself: packages and directories become components, and arrows are imports, HTTP calls matched to server routes, and use of databases or other services.</div>
       <section>
         <h4>Components ({arch.components.length})</h4>
         <div className="link-list">

@@ -1,5 +1,5 @@
 import type { Architecture, DiagramAnswer, DiagramEvent } from '@cq/shared';
-import { DiagramAnswerSchema } from '@cq/shared';
+import { DiagramAnswerSchema, defaultView, findConnection } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { AGENT_GUIDANCE } from '../llm/agent.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
@@ -24,7 +24,8 @@ export async function answerOnDiagram(
     if (hit) return void emit({ type: 'result', answer: JSON.parse(hit.content), cached: true });
   }
   const ix = new RepoIndex(db, repoId, embeddings);
-  const arch = getArchitecture(db, repoId);
+  // The model sees the diagram as first shown; the UI maps ids inside collapsed components to what is visible.
+  const arch = defaultView(getArchitecture(db, repoId));
   const res = await agentWithFallback(llm, {
     system: `You answer questions about a codebase by pointing at its architecture diagram. ${AGENT_GUIDANCE}
 Investigate as needed, then submit_diagram_answer with: a concise markdown answer, the component and connection ids involved (ONLY ids from the diagram below), and an ordered tour (3-8 stops) that walks the path step by step with a caption per stop and a code ref where useful.`,
@@ -63,10 +64,11 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
   const raw = res.final as DiagramAnswer;
   // Background synthesis may have replaced the diagram during the run: validate against the current
   // one, and only cache answers built from the diagram that is still published.
-  const current = getArchitecture(db, repoId);
+  const full = getArchitecture(db, repoId);
+  const current = defaultView(full);
   const stale = diagramSignature(current) !== diagramSignature(arch);
-  const compIds = new Set(current.components.map((c) => c.id));
-  const connIds = new Set(current.connections.map((c) => c.id));
+  const compIds = new Set(full.components.map((c) => c.id));
+  const connIds = new Set([...current.connections, ...full.connections].map((c) => c.id));
   const answer: DiagramAnswer = {
     answerMd: raw.answerMd,
     highlight: { componentIds: raw.highlight.componentIds.filter((id) => compIds.has(id)), connectionIds: raw.highlight.connectionIds.filter((id) => connIds.has(id)) },
@@ -74,7 +76,7 @@ Investigate as needed, then submit_diagram_answer with: a concise markdown answe
   };
   // Connections on the tour imply their endpoints are highlighted too.
   for (const t of answer.tour) {
-    const e = t.connectionId ? current.connections.find((x) => x.id === t.connectionId) : undefined;
+    const e = t.connectionId ? findConnection(full, t.connectionId) : undefined;
     if (e) {
       for (const id of [e.from, e.to]) if (!answer.highlight.componentIds.includes(id)) answer.highlight.componentIds.push(id);
       if (!answer.highlight.connectionIds.includes(e.id)) answer.highlight.connectionIds.push(e.id);

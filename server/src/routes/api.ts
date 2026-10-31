@@ -2,7 +2,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import multer from 'multer';
 import type { AskEvent, AskRequest, Category, JobEvent } from '@cq/shared';
-import { CategorySchema } from '@cq/shared';
+import { CategorySchema, descendants, findConnection } from '@cq/shared';
 import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import { COOKIE_NAME, mintCode } from '../auth.js';
@@ -182,17 +182,21 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const arch = getArchitecture(db, req.params.id);
     const c = arch.components.find((x) => x.id === req.params.cid);
     if (!c) return void res.status(404).json({ error: 'Component not found' });
-    const files = (db.prepare(`SELECT path, lang, lines, summary, json_extract(meta, '$.history') AS history FROM files WHERE repo_id=? AND json_extract(meta, '$.component') = ? ORDER BY path`).all(req.params.id, c.id) as any[]).slice(0, 300);
+    // A component's files include those of the components inside it.
+    const ids = [...descendants(arch, c.id)];
+    const files = (db.prepare(`SELECT path, lang, lines, summary, json_extract(meta, '$.history') AS history FROM files WHERE repo_id=? AND json_extract(meta, '$.component') IN (${ids.map(() => '?').join(',')}) ORDER BY path`).all(req.params.id, ...ids) as any[]).slice(0, 300);
     for (const f of files) f.history = f.history ? JSON.parse(f.history) : null;
-    const incoming = arch.connections.filter((e) => e.to === c.id);
-    const outgoing = arch.connections.filter((e) => e.from === c.id);
+    const inside = new Set(ids);
+    const incoming = arch.connections.filter((e) => inside.has(e.to) && !inside.has(e.from));
+    const outgoing = arch.connections.filter((e) => inside.has(e.from) && !inside.has(e.to));
     res.json({ component: c, files, incoming, outgoing });
   });
 
   r.get('/repos/:id/connections/:eid', (req, res) => {
     if (!getRepo(req, res)) return;
     const arch = getArchitecture(db, req.params.id);
-    const e = arch.connections.find((x) => x.id === req.params.eid);
+    // Diagram edges can stand for several stored links when components are collapsed.
+    const e = arch.connections.find((x) => x.id === req.params.eid) ?? findConnection(arch, req.params.eid);
     if (!e) return void res.status(404).json({ error: 'Connection not found' });
     const snippets = e.evidence.slice(0, 6).map((ev) => ({ ...snippet(db, req.params.id, ev.path, ev.startLine, ev.endLine), note: ev.note ?? null })).filter((s) => s.code != null);
     res.json({ connection: e, from: arch.components.find((c) => c.id === e.from), to: arch.components.find((c) => c.id === e.to), snippets });
@@ -203,10 +207,12 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     if (!getRepo(req, res)) return;
     const scope = typeof req.query.scope === 'string' ? req.query.scope : null;
     const files = db.prepare(`SELECT path, lang, lines, summary, json_extract(meta, '$.component') AS component FROM files WHERE repo_id=?`).all(req.params.id) as any[];
-    const inScope = new Set(files.filter((f) => !scope || f.component === scope).map((f) => f.path));
+    // A component's scope includes the components nested inside it.
+    const scopeIds = scope ? descendants(getArchitecture(db, req.params.id), scope) : null;
+    const inScope = new Set(files.filter((f) => !scopeIds || scopeIds.has(f.component)).map((f) => f.path));
     const edges = (db.prepare(`SELECT src, dst, kind, line FROM file_edges WHERE repo_id=? AND kind='import'`).all(req.params.id) as any[]).filter((e) => inScope.has(e.src) || inScope.has(e.dst));
     const touched = new Set([...inScope, ...edges.flatMap((e) => [e.src, e.dst])]);
-    const nodes = files.filter((f) => touched.has(f.path) && (inScope.has(f.path) || f.component !== scope)).slice(0, 400);
+    const nodes = files.filter((f) => touched.has(f.path)).slice(0, 400);
     const ids = new Set(nodes.map((n) => n.path));
     res.json({
       nodes: nodes.map((n) => ({ path: n.path, lang: n.lang, lines: n.lines, summary: n.summary, component: n.component, external: !inScope.has(n.path) })),

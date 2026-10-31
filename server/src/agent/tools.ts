@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { defaultView } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import type { AgentTool } from '../llm/agent.js';
@@ -391,13 +392,13 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
     },
     {
       name: 'get_architecture',
-      description: 'The current component diagram: components (with paths) and connections.',
+      description: 'The component diagram as first shown (packages opened up to their modules): components with paths, parent and connections. Imports into widely used helper modules and edges implied by longer paths are left out.',
       schema: z.object({}),
       label: () => 'Reading architecture',
       run: async () => {
-        const a = getArchitecture(ix.db, ix.repoId);
+        const a = defaultView(getArchitecture(ix.db, ix.repoId));
         return {
-          components: a.components.map((c) => ({ id: c.id, name: c.name, type: c.type, paths: c.paths, description: c.description, ...(c as any).extra })),
+          components: a.components.map((c) => ({ id: c.id, name: c.name, type: c.type, paths: c.paths, description: c.description, parentId: c.parentId })),
           connections: a.connections.map((e) => ({ id: e.id, from: e.from, to: e.to, kind: e.kind, label: e.label, evidence: e.evidence.slice(0, 3) })),
         };
       },

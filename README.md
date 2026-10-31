@@ -37,10 +37,12 @@ The app keeps a bounded git history (`HISTORY_DEPTH`, 1000 commits by default) a
 
 If history is truncated (shallow clone), creation dates are shown as "on or before". Exports include file timelines; symbol history, blame and diffs need re-analysis after import, because `.git` isn't exported. The kept `.git` has its credentials and reflogs removed, and only read-only git commands are run on it.
 
-### Better diagrams from LLM understanding
+### Architecture diagram from the code
 
-- **Architecture with code evidence.** The model builds the component diagram from the static-analysis facts, cites code for each connection, and records the protocol, sync vs async, and the data exchanged. Connections backed by cited code are solid; the rest are dotted and marked "?".
-- **Layers and groups.** Components are ordered left to right by layer (entry → interface → core → data → infra → external). Multi-package repos are drawn with service or package containers.
+- **Built by static analysis.** The diagram is deterministic: no LLM invents or merges components. Packages (from `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml` and similar manifests) become containers, with their modules and subdirectories inside.
+- **Expand in place.** Click ⊕ (or double-click) to open a component and see what is inside; ⊖ collapses it again. A component with nothing inside opens its file-level import graph.
+- **Real connections.** Arrows are imports between components (thicker for more imports), HTTP calls matched from client code (`fetch('/api/users')`) to the server routes that handle them, and use of databases, queues and other services. Each arrow links to the lines of code behind it.
+- **Less clutter.** Imports into modules used by most of the code (helpers, shared types) and edges already implied by a longer path are hidden by default; toolbar toggles bring them back.
 - **Ask the diagram.** Ask "what happens on login?" and the matching path through the diagram is highlighted. **Walk me through it** then plays a step-by-step tour that pans to each component and connection with a caption and a code link.
 
 ### The model investigates instead of guessing
@@ -118,7 +120,8 @@ clone (https only, bounded history) → scan (.gitignore, skip binaries/vendored
   → git history index (commits, per-file changes, renames)
   → LLM: per-file summaries (batched, cached by content hash)
   → LLM: per-category insights + suggested questions (results open here)
-  → LLM, in the background: architecture synthesis (components + connections with code evidence), then a full codebase review
+  → static architecture: package/module/directory tree, imports, HTTP calls matched to routes, infrastructure use
+  → LLM, in the background: a full codebase review
   → SQLite knowledge base (+ symbol ranges and a cross-reference index for the agent's tools)
 ```
 

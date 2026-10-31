@@ -19,7 +19,6 @@ export interface RepoContext {
   readme: string | null;
   summaries: Map<string, string>;
   llm: LLMProvider;
-  /** DB-backed index for agent tools (set once static indexing is persisted). */
   /** Repo-level git history facts (null without history). */
   history?: ReturnType<typeof repoHistorySummary>;
   warn: (msg: string) => void;

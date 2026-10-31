@@ -24,10 +24,10 @@ export function useJobProgress(jobId: string | null, onDone?: () => void) {
     es.onmessage = (m) => {
       const e = JSON.parse(m.data) as JobEvent;
       setEv(e);
-      // Results become readable when the job enters the background architecture stage; refresh once.
+      // Results become readable when the job enters the background code-review stage; refresh once.
       const entered = e.stage !== stage;
       stage = e.stage;
-      if (entered && e.stage === 'architecture' && !e.done) done.current?.();
+      if (entered && e.stage === 'review' && !e.done) done.current?.();
       if (e.done) {
         es.close();
         done.current?.();

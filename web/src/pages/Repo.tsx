@@ -25,8 +25,8 @@ const TABS = [
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
-// The last steps run after results are shown (repo status 'enriching'), when this view is gone.
-const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'architecture' && step.id !== 'review');
+// The code review runs after results are shown (repo status 'enriching'), when this view is gone.
+const FOREGROUND_STEPS = ANALYSIS_STEPS.filter((step) => step.id !== 'review');
 
 function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
   const ev = useJobProgress(repo.currentJobId, onDone);
@@ -43,7 +43,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
             <li key={step.id} style={{ color: i < cur ? 'var(--ok)' : i === cur ? 'var(--text)' : undefined, fontWeight: i === cur ? 600 : 400 }}>{step.label}</li>
           ))}
         </ol>
-        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the architecture diagram is then refined and the code reviewed in the background.</p>
+        <p className="small muted" style={{ marginTop: 8 }}>Results open once these steps finish; the code review then runs in the background.</p>
       </div>
     </div>
   );
@@ -166,7 +166,7 @@ export function Repo() {
           <Progress repo={repo} onDone={load} />
         ) : (
           <>
-            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. Architecture synthesis and the code review are running in the background; the diagram and Review tab update automatically.</div>}
+            {repo.status === 'enriching' && <div className="small muted" style={{ padding: '8px 16px' }}><span className="spinner" /> Results are available. The code review is running in the background; the Review tab updates when it is done.</div>}
             {repo.status === 'failed' && <div className="error-box" style={{ margin: 12 }}>Analysis failed: {repo.error}</div>}
             {repo.status === 'ready' && repo.error && (
               <details className="small muted" style={{ padding: '6px 16px', background: 'var(--surface-2)' }}>

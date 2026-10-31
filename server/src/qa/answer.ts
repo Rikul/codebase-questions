@@ -1,5 +1,5 @@
 import type { AskEvent, AskRequest, Category, Citation } from '@cq/shared';
-import { CATEGORIES, CATEGORY_LABELS } from '@cq/shared';
+import { CATEGORIES, CATEGORY_LABELS, defaultView, findConnection } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
@@ -8,6 +8,7 @@ import type { RetrievedChunk } from './retrieve.js';
 import { retrieve } from './retrieve.js';
 import { agentEventMapper, resolveTarget } from '../agent/explain.js';
 import { RepoIndex, repoTools } from '../agent/tools.js';
+import { getArchitecture } from '../routes/queries.js';
 import { AGENT_GUIDANCE } from '../llm/agent.js';
 import { agentWithFallback } from '../llm/index.js';
 
@@ -109,11 +110,8 @@ function resolveFocus(db: DB, repoId: string, focus: AskRequest['focus']): Focus
     if (c) return { paths: json<string[]>(c.paths, []), text: `The user is asking about the component "${c.name}" (${c.type}): ${c.description}` };
   }
   if (focus.connectionId) {
-    const e = db.prepare('SELECT * FROM connections WHERE repo_id=? AND id=?').get(repoId, focus.connectionId) as any;
-    if (e) {
-      const ev = json<{ path: string }[]>(e.evidence, []);
-      return { paths: [...new Set(ev.map((x) => x.path))], text: `The user is asking about the connection ${e.src} → ${e.dst} (${e.kind}, "${e.label}"): ${e.description}` };
-    }
+    const e = findConnection(getArchitecture(db, repoId), focus.connectionId);
+    if (e) return { paths: [...new Set(e.evidence.map((x) => x.path))], text: `The user is asking about the connection ${e.from} → ${e.to} (${e.kind}, "${e.label}"): ${e.description}` };
   }
   if (focus.path) {
     try {
@@ -155,8 +153,10 @@ export async function* answerQuestion(
   const sources: Citation[] = chunks.map((c) => ({ path: c.path, startLine: c.startLine, endLine: c.endLine }));
   yield { type: 'sources', citations: sources };
 
-  const comps = db.prepare('SELECT id, name, type, description, paths FROM components WHERE repo_id=?').all(repoId) as any[];
-  const conns = db.prepare('SELECT src, dst, kind, label FROM connections WHERE repo_id=?').all(repoId) as any[];
+  // The diagram as first shown: packages opened up to their modules, everything below collapsed.
+  const view = defaultView(getArchitecture(db, repoId));
+  const comps = view.components;
+  const conns = view.connections;
   const insights = db.prepare('SELECT title, body_md, severity FROM insights WHERE repo_id=? AND category=? ORDER BY position').all(repoId, category) as any[];
   const paths = [...new Set(chunks.map((c) => c.path))];
   const sums = paths.length
@@ -166,8 +166,8 @@ export async function* answerQuestion(
   const context = [
     `# Repository: ${repo.name} (${repo.url}${repo.commit_sha ? ` @ ${repo.commit_sha.slice(0, 10)}` : ''})`,
     repo.overview ? `## Architecture overview\n${String(repo.overview).slice(0, 3000)}` : '',
-    comps.length ? `## Components\n${comps.map((c) => `- ${c.id}: ${c.name} [${c.type}] (${json<string[]>(c.paths, []).join(', ') || 'external'}) — ${c.description}`).join('\n')}` : '',
-    conns.length ? `## Connections\n${conns.map((e) => `- ${e.src} → ${e.dst} [${e.kind}] ${e.label}`).join('\n')}` : '',
+    comps.length ? `## Components\n${comps.map((c) => `- ${c.id}: ${c.name} [${c.type}] (${c.paths.join(', ') || 'external'}) — ${c.description}`).join('\n')}` : '',
+    conns.length ? `## Connections\n${conns.map((e) => `- ${e.from} → ${e.to} [${e.kind}] ${e.label}`).join('\n')}` : '',
     insights.length ? `## Knowledge base: ${CATEGORY_LABELS[category]}\n${insights.map((i) => `### ${i.title}${i.severity ? ` (${i.severity})` : ''}\n${String(i.body_md).slice(0, 1500)}`).join('\n\n').slice(0, 9000)}` : '',
     sums.length ? `## File summaries\n${sums.map((s) => `- ${s.path}: ${s.summary ?? ''}`).join('\n')}` : '',
     `## Retrieved code\n${chunks.map((c) => `### [${c.path}:${c.startLine}-${c.endLine}]\n${numbered(c)}`).join('\n\n')}`,

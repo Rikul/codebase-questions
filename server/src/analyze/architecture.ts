@@ -1,49 +1,13 @@
-import { z } from 'zod';
-import type { Architecture, Component, ComponentType, Connection, ConnectionKind } from '@cq/shared';
-import { COMPONENT_TYPES, CONNECTION_KINDS, LAYERS } from '@cq/shared';
-import type { Layer } from '@cq/shared';
-import { jsonWithFallback } from '../llm/index.js';
+import type { Architecture, Component, ComponentType, Connection, ConnectionKind, Layer } from '@cq/shared';
+import { connectionId } from '@cq/shared';
+import { buildHierarchy, filesUnder, flatten } from '../ingest/hierarchy.js';
+import { linkHttpCalls } from '../ingest/http.js';
 import type { RepoContext } from './context.js';
-import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, readmeIntro, slug, truncate } from './context.js';
+import { entryPoints, isCode, readmeIntro } from './context.js';
 
-// Unknown enum values from the model are coerced (to 'other' or dropped) rather than
-// rejecting the whole architecture, which would discard an otherwise good answer.
-const LlmArchSchema = z.object({
-  overview: z.string().describe('Markdown overview (3-6 paragraphs) of the system architecture, main flows and design choices.'),
-  components: z
-    .array(
-      z.object({
-        id: z.string().describe('short kebab-case id'),
-        name: z.string(),
-        type: z.enum(COMPONENT_TYPES).catch('other'),
-        description: z.string().describe('2-3 sentences'),
-        responsibilities: z.array(z.string()).describe('3-6 bullet points'),
-        paths: z.array(z.string()).describe('directory prefixes or file paths that belong to this component; empty for external systems'),
-        layer: z.enum(LAYERS).optional().catch(undefined).describe('entry (routes/CLI/main), interface (UI/API surface), core (domain logic), data (persistence/models), infra (config/build/deploy), external (third-party systems)'),
-        group: z.string().optional().describe('deployable unit or package this belongs to (e.g. "api-server", "web-client"); omit for single-package repos'),
-        keyFiles: z.array(z.string()).optional().describe('2-5 most important files'),
-        entryPoints: z.array(z.string()).optional(),
-        techStack: z.array(z.string()).optional().describe('frameworks/libraries this component is built on'),
-      }),
-    )
-    .describe('5-15 components, including external systems (databases, queues, third-party APIs) the code talks to'),
-  connections: z.array(
-    z.object({
-      from: z.string().describe('component id'),
-      to: z.string().describe('component id'),
-      kind: z.enum(CONNECTION_KINDS).catch('other'),
-      label: z.string().describe('2-5 word edge label, e.g. "REST calls", "reads/writes users"'),
-      description: z.string().describe('How and why these components interact; name the functions/endpoints involved.'),
-      evidence: z
-        .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))
-        .describe('1-4 code locations demonstrating the interaction, taken from the provided samples'),
-      sync: z.enum(['sync', 'async']).optional().catch(undefined),
-      protocol: z.string().optional().describe('e.g. "in-process call", "REST/HTTP", "SQL", "Redis", "Kafka topic orders", "WebSocket"'),
-      dataExchanged: z.string().optional().describe('what flows over this edge, e.g. "User records", "job payloads"'),
-      direction: z.enum(['request', 'response', 'bidirectional']).optional().catch(undefined),
-    }),
-  ),
-});
+// The architecture diagram comes from static analysis only: the component tree follows packages and
+// directories (ingest/hierarchy.ts), and connections are imports, HTTP calls matched to routes, and
+// infrastructure use. The LLM never adds, merges or removes components.
 
 const INFRA_NAMES: Record<string, { name: string; type: ComponentType; kind: ConnectionKind; label: string }> = {
   'db:postgres': { name: 'PostgreSQL', type: 'database', kind: 'db', label: 'SQL queries' },
@@ -64,9 +28,14 @@ const LAYER_OF: Record<ComponentType, Layer> = {
   database: 'data', queue: 'data', config: 'infra', test: 'infra', external: 'external', other: 'core',
 };
 
-function guessType(ctx: RepoContext, id: string, files: string[]): ComponentType {
-  const p = id.toLowerCase();
-  if (/(^|\/)(tests?|__tests__|spec|e2e)(\/|$)/.test(p)) return 'test';
+const CONFIG_LANGS = new Set(['dockerfile', 'shell', 'bash', 'makefile', 'yaml', 'toml', 'hcl', 'terraform', 'nginx', 'powershell', 'batch']);
+
+/** Type from the component's own folder name (not its whole path, so everything under server/ isn't "api") and its files. */
+function guessType(ctx: RepoContext, fullPath: string, ownName: string, files: string[]): ComponentType {
+  if (/(^|\/)(tests?|__tests__|spec|e2e)(\/|$)/.test(fullPath.toLowerCase())) return 'test';
+  const code = files.filter((f) => isCode(ctx.fileByPath.get(f)!));
+  if (code.length && code.every((f) => CONFIG_LANGS.has(ctx.fileByPath.get(f)!.lang ?? '') || /(^|\/)(Dockerfile|Makefile)[^/]*$/.test(f))) return 'config';
+  const p = ownName.toLowerCase();
   const routes = files.reduce((n, f) => n + (ctx.facts.get(f)?.routes.length ?? 0), 0);
   if (routes > 0 || /(^|\/)(api|routes?|controllers?|handlers?|endpoints?|server)(\/|$)/.test(p)) return 'api';
   const ui = files.filter((f) => /\.(tsx|jsx|vue|svelte|astro|html|css|scss)$/.test(f)).length;
@@ -79,238 +48,157 @@ function guessType(ctx: RepoContext, id: string, files: string[]): ComponentType
   return 'service';
 }
 
-function prettyName(id: string): string {
-  if (id === '(root)') return 'Project root';
-  const segs = id.split('/');
-  const last = segs[segs.length - 1];
-  const parent = segs.length > 1 ? segs[segs.length - 2] : '';
-  const generic = ['src', 'lib', 'app', 'index', 'main'];
-  const name = generic.includes(last) && parent ? `${parent}/${last}` : last;
-  return name.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
+/** The diagram, plus which component owns each file (the deepest component containing it). */
+export function staticArchitecture(ctx: RepoContext): { architecture: Architecture; owner: Map<string, string> } {
+  const tree = buildHierarchy(ctx.files);
+  const flat = flatten(tree);
+  const owner = new Map<string, string>();
+  for (const { node } of flat) for (const f of node.ownFiles) owner.set(f, node.id);
+  const pathOf = new Map(flat.map(({ node }) => [node.id, node.path]));
+  const label = (id: string) => (pathOf.get(id) ? `\`${pathOf.get(id)}\`` : 'the project root');
 
-/** Architecture derived purely from directory structure, the import graph and infra signals. */
-export function heuristicArchitecture(ctx: RepoContext): Architecture {
-  const components: Component[] = [];
-  const idFor = new Map<string, string>();
-  const used = new Set<string>();
-  const uniq = (base: string) => {
-    let id = base;
-    for (let i = 2; used.has(id); i++) id = `${base}-${i}`;
-    used.add(id);
-    return id;
-  };
-  const withCode = ctx.groups.filter((g) => g.codeFiles > 0);
-  for (const g of (withCode.length ? withCode : ctx.groups).slice(0, 18)) {
-    const id = uniq(slug(g.id === '(root)' ? 'root' : g.id));
-    idFor.set(g.id, id);
-    const type = guessType(ctx, g.id, g.files);
-    const codeFiles = g.files.filter((f) => isCode(ctx.fileByPath.get(f)!));
+  const components: Component[] = flat.map(({ node, parent }) => {
+    const files = filesUnder(node);
+    const codeFiles = files.filter((f) => isCode(ctx.fileByPath.get(f)!));
+    const ownName = parent && node.path.startsWith(parent.path + '/') ? node.path.slice(parent.path.length + 1) : node.path;
+    const type = guessType(ctx, node.path, ownName || '(root)', files);
     const nonTest = codeFiles.filter((f) => !ctx.facts.get(f)?.isTest);
-    const topFiles = (nonTest.length ? nonTest : codeFiles)
+    const topFiles = [...(nonTest.length ? nonTest : codeFiles)]
       .sort((a, b) => (ctx.centrality.get(b) ?? 0) - (ctx.centrality.get(a) ?? 0) || ctx.fileByPath.get(b)!.lines - ctx.fileByPath.get(a)!.lines)
       .slice(0, 3);
-    const where = g.id === '(root)' ? 'at the repository root' : `under \`${g.id}/\``;
     const exported = topFiles.flatMap((f) => (ctx.facts.get(f)?.symbols ?? []).filter((s) => s.exported).map((s) => s.name)).slice(0, 5);
-    components.push({
-      id,
-      name: prettyName(g.id),
+    const where = node.path ? `under \`${node.path}/\`` : 'at the repository root';
+    const what = node.kind === 'package' ? `Package${node.name !== node.path ? ` \`${node.name}\`` : ''} with ${codeFiles.length}` : `${codeFiles.length}`;
+    return {
+      id: node.id,
+      name: node.name,
       type,
-      description: `${codeFiles.length} code file${codeFiles.length === 1 ? '' : 's'} ${where}${topFiles.length ? `; main: ${topFiles.map((f) => `\`${f.split('/').pop()}\``).join(', ')}` : ''}${exported.length ? `. Defines ${exported.join(', ')}` : ''}.`,
+      description: `${what} code file${codeFiles.length === 1 ? '' : 's'} ${where}${topFiles.length ? `; main: ${topFiles.map((f) => `\`${f.split('/').pop()}\``).join(', ')}` : ''}${exported.length ? `. Defines ${exported.join(', ')}` : ''}.`,
       responsibilities: topFiles.map((f) => `${f.split('/').pop()}: ${(ctx.summaries.get(f) ?? '').slice(0, 140)}`),
+      paths: node.path ? [node.path] : [],
       layer: LAYER_OF[type],
       keyFiles: topFiles,
-      entryPoints: g.files.filter((f) => ctx.facts.get(f)?.isEntry && !ctx.facts.get(f)?.isTest).slice(0, 4),
-      techStack: [...new Set(g.files.flatMap((f) => [...(ctx.graph.external.get(f) ?? [])]))].slice(0, 6),
-      paths: g.id === '(root)' ? [] : [g.id],
-    });
-  }
+      entryPoints: files.filter((f) => ctx.facts.get(f)?.isEntry && !ctx.facts.get(f)?.isTest).slice(0, 4),
+      techStack: [...new Set(files.flatMap((f) => [...(ctx.graph.external.get(f) ?? [])]))].slice(0, 6),
+      ...(parent ? { parentId: parent.id } : {}),
+      ...(node.kind === 'package' && !parent ? { expandByDefault: true } : {}),
+    };
+  });
+
   const connections: Connection[] = [];
-  for (const e of ctx.moduleEdges.slice(0, 40)) {
-    const a = idFor.get(e.from);
-    const b = idFor.get(e.to);
-    if (!a || !b) continue;
+  // Imports between the components that own the two files.
+  const imports = new Map<string, { from: string; to: string; n: number; samples: { path: string; line: number; target: string }[] }>();
+  for (const e of ctx.graph.edges) {
+    const a = owner.get(e.from);
+    const b = owner.get(e.to);
+    if (!a || !b || a === b) continue;
+    const k = `${a}\0${b}`;
+    const agg = imports.get(k) ?? imports.set(k, { from: a, to: b, n: 0, samples: [] }).get(k)!;
+    agg.n++;
+    if (agg.samples.length < 4) agg.samples.push({ path: e.from, line: e.line, target: e.to });
+  }
+  for (const e of imports.values()) {
     connections.push({
-      id: `${a}--${b}`,
-      from: a,
-      to: b,
+      id: connectionId(e.from, e.to, 'calls'),
+      from: e.from,
+      to: e.to,
       kind: 'calls',
-      label: `${e.count} import${e.count > 1 ? 's' : ''}`,
-      description: `Code in \`${e.from}\` imports ${e.count} module(s) from \`${e.to}\`, e.g. ${e.samples
-        .slice(0, 3)
-        .map((s) => `\`${s.path}\` → \`${s.target}\``)
-        .join(', ')}.`,
-      evidence: e.samples.slice(0, 4).map((s) => ({ path: s.path, startLine: s.line, endLine: s.line, note: `imports ${s.target}` })),
+      label: `${e.n} import${e.n > 1 ? 's' : ''}`,
+      description: `Code in ${label(e.from)} imports code in ${label(e.to)} ${e.n} time${e.n > 1 ? 's' : ''}, e.g. ${e.samples.slice(0, 3).map((s) => `\`${s.path}\` → \`${s.target}\``).join(', ')}.`,
+      evidence: e.samples.map((s) => ({ path: s.path, startLine: s.line, endLine: s.line, note: `imports ${s.target}` })),
       sync: 'sync',
       protocol: 'in-process call',
       direction: 'request',
       confidence: 'verified',
+      weight: e.n,
     });
   }
-  // External systems from infra signals.
+
+  // API calls from client code matched to the server routes that handle them.
+  const http = new Map<string, { from: string; to: string; calls: Set<string>; routes: Map<string, { path: string; line: number }>; evidence: { path: string; line: number; note: string }[] }>();
+  for (const l of linkHttpCalls(ctx.facts)) {
+    const a = owner.get(l.client);
+    const b = owner.get(l.server);
+    if (!a || !b || a === b) continue;
+    const k = `${a}\0${b}`;
+    const agg = http.get(k) ?? http.set(k, { from: a, to: b, calls: new Set(), routes: new Map(), evidence: [] }).get(k)!;
+    const callKey = `${l.client}:${l.clientLine}`;
+    if (!agg.calls.has(callKey) && agg.evidence.length < 3) agg.evidence.push({ path: l.client, line: l.clientLine, note: `calls ${l.callPath}` });
+    agg.calls.add(callKey);
+    agg.routes.set(`${l.method} ${l.route}`, { path: l.server, line: l.serverLine });
+  }
+  for (const e of http.values()) {
+    const routes = [...e.routes];
+    connections.push({
+      id: connectionId(e.from, e.to, 'http'),
+      from: e.from,
+      to: e.to,
+      kind: 'http',
+      label: `${e.calls.size} API call${e.calls.size > 1 ? 's' : ''}`,
+      description: `Code in ${label(e.from)} calls ${routes.length} HTTP endpoint${routes.length > 1 ? 's' : ''} served by ${label(e.to)}: ${routes.slice(0, 5).map(([r]) => `\`${r}\``).join(', ')}${routes.length > 5 ? ', …' : ''}.`,
+      evidence: [
+        ...e.evidence.map((v) => ({ path: v.path, startLine: v.line, endLine: v.line, note: v.note })),
+        ...routes.slice(0, 2).map(([r, v]) => ({ path: v.path, startLine: v.line, endLine: v.line, note: `handles ${r}` })),
+      ],
+      sync: 'sync',
+      protocol: 'REST/HTTP',
+      direction: 'request',
+      confidence: 'verified',
+      weight: e.calls.size,
+    });
+  }
+
+  // External systems from infrastructure signals (databases, queues, third-party APIs).
+  const topOf = new Map<string, string>();
+  for (const { node, parent } of flat) topOf.set(node.id, parent ? topOf.get(parent.id)! : node.id);
   const infraUse = new Map<string, Map<string, { path: string; line: number; detail: string }[]>>();
   for (const f of ctx.files) {
     const fx = ctx.facts.get(f.path);
-    if (!fx || fx.isTest) continue;
-    const mod = ctx.fileToModule.get(f.path);
-    if (!mod || !idFor.has(mod)) continue;
+    const own = owner.get(f.path);
+    if (!fx || fx.isTest || !own) continue;
     for (const s of fx.infra) {
       if (!INFRA_NAMES[s.kind]) continue;
       const m = infraUse.get(s.kind) ?? infraUse.set(s.kind, new Map()).get(s.kind)!;
-      const arr = m.get(mod) ?? m.set(mod, []).get(mod)!;
+      const arr = m.get(own) ?? m.set(own, []).get(own)!;
       if (arr.length < 3) arr.push({ path: f.path, line: s.line, detail: s.detail });
     }
   }
-  for (const [kind, mods] of infraUse) {
+  const usedIds = new Set(components.map((c) => c.id));
+  for (const [kind, owners] of infraUse) {
     const info = INFRA_NAMES[kind];
-    if (kind === 'http-client' && mods.size > 6) continue;
-    const id = uniq(slug(info.name));
-    components.push({ id, layer: info.type === 'external' ? 'external' : 'data', name: info.name, type: info.type, description: `${info.name}, detected from how the code uses it (${[...mods.keys()].length} module(s)).`, responsibilities: [], paths: [] });
-    for (const [mod, uses] of mods) {
-      const from = idFor.get(mod)!;
+    if (kind === 'http-client' && new Set([...owners.keys()].map((o) => topOf.get(o))).size > 6) continue;
+    let id = info.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    for (let i = 2; usedIds.has(id); i++) id = `${id.replace(/-\d+$/, '')}-${i}`;
+    usedIds.add(id);
+    components.push({ id, layer: info.type === 'external' ? 'external' : 'data', name: info.name, type: info.type, description: `${info.name}, detected from how the code uses it (${owners.size} component${owners.size > 1 ? 's' : ''}).`, responsibilities: [], paths: [] });
+    for (const [from, uses] of owners) {
       connections.push({
-        id: `${from}--${id}`,
+        id: connectionId(from, id, info.kind),
         from,
         to: id,
         kind: info.kind,
         label: info.label,
-        description: `\`${mod}\` talks to ${info.name}.`,
+        description: `${label(from)} talks to ${info.name}.`,
         evidence: uses.map((u) => ({ path: u.path, startLine: u.line, endLine: u.line, note: u.detail.slice(0, 80) })),
         sync: info.kind === 'queue' ? 'async' : 'sync',
         protocol: info.label,
         direction: 'request',
-        confidence: 'inferred',
+        confidence: 'verified',
+        weight: uses.length,
       });
     }
   }
+
+  const top = tree.length;
+  const packages = tree.filter((n) => n.kind === 'package').length;
   const eps = entryPoints(ctx);
   const overview = [
-    `**${ctx.repoName}** contains ${ctx.files.length} files grouped into ${components.filter((c) => c.paths.length).length} modules.`,
+    `**${ctx.repoName}** contains ${ctx.files.length} files${packages ? ` in ${packages} package${packages > 1 ? 's' : ''}` : ''}, shown as ${top} top-level component${top > 1 ? 's' : ''}. Expand a component to see the modules and directories inside it.`,
+    http.size ? `Client code calls the server over HTTP in ${http.size} place${http.size > 1 ? 's' : ''} (matched from API paths in the code to the routes that handle them).` : '',
     eps.length ? `Entry points: ${eps.slice(0, 6).map((e) => `\`${e}\``).join(', ')}.` : '',
     ctx.readme ? `From the README:\n\n> ${readmeIntro(ctx.readme)}` : '',
-    '_This overview was generated from static analysis. Configure an LLM API key for richer architecture descriptions._',
   ]
     .filter(Boolean)
     .join('\n\n');
-  return { overview, components, connections };
-}
-
-function architecturePrompt(ctx: RepoContext): string {
-  const routes = allRoutes(ctx);
-  const modules = ctx.groups.slice(0, 22).map((g) => {
-    const files = g.files
-      .filter((f) => ctx.summaries.has(f))
-      .sort((a, b) => (ctx.centrality.get(b) ?? 0) - (ctx.centrality.get(a) ?? 0))
-      .slice(0, 6);
-    const infra = new Set<string>();
-    for (const f of g.files) for (const s of ctx.facts.get(f)?.infra ?? []) infra.add(s.kind);
-    const ext = new Set<string>();
-    for (const f of g.files) for (const p of ctx.graph.external.get(f) ?? []) ext.add(p);
-    return [
-      `## Module \`${g.id}\` (${g.files.length} files, ${g.codeFiles} code)`,
-      infra.size ? `infra signals: ${[...infra].join(', ')}` : '',
-      ext.size ? `external packages: ${[...ext].slice(0, 15).join(', ')}` : '',
-      ...files.map((f) => `- ${f}: ${truncate(ctx.summaries.get(f)!, 400)}`),
-    ]
-      .filter(Boolean)
-      .join('\n');
-  });
-  const edges = ctx.moduleEdges
-    .slice(0, 60)
-    .map((e) => `- ${e.from} -> ${e.to} (${e.count} imports) e.g. ${e.samples.slice(0, 2).map((s) => `${s.path}:${s.line} imports ${s.target}`).join('; ')}`);
-  const infraSamples: string[] = [];
-  for (const f of ctx.files) {
-    for (const s of ctx.facts.get(f.path)?.infra ?? []) {
-      if (infraSamples.length < 60 && s.kind !== 'http-client') infraSamples.push(`- ${f.path}:${s.line} [${s.kind}] ${s.detail}`);
-    }
-  }
-  return [
-    `Repository: ${ctx.repoName}`,
-    ctx.readme ? `# README (excerpt)\n${truncate(ctx.readme, 4000)}` : '',
-    `# Directory tree\n${dirTree(ctx.files)}`,
-    `# Dependencies\n${ctx.deps.filter((d) => !d.dev).slice(0, 80).map((d) => `${d.ecosystem}:${d.name}@${d.version} (${d.manifest})`).join('\n')}`,
-    `# Entry points\n${entryPoints(ctx).join('\n')}`,
-    routes.length ? `# HTTP routes\n${routes.slice(0, 60).map((r) => `- ${r.method} ${r.route} (${r.path}:${r.line})`).join('\n')}` : '',
-    `# Modules\n${modules.join('\n\n')}`,
-    `# Module import edges\n${edges.join('\n')}`,
-    infraSamples.length ? `# Infrastructure touch points\n${infraSamples.join('\n')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-}
-
-export function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>): Architecture {
-  const used = new Set<string>();
-  const remap = new Map<string, string>();
-  const components: Component[] = [];
-  for (const c of raw.components) {
-    let id = slug(c.id || c.name);
-    for (let i = 2; used.has(id); i++) id = `${slug(c.id || c.name)}-${i}`;
-    used.add(id);
-    remap.set(c.id, id);
-    remap.set(slug(c.name), id);
-    const paths = c.paths
-      .map((p) => p.replace(/^\.?\//, '').replace(/\/\*\*?$/, '').replace(/\/$/, ''))
-      .filter((p) => p && ctx.files.some((f) => f.path === p || f.path.startsWith(p + '/')));
-    const keyFiles = c.keyFiles?.map((p) => p.replace(/^\.?\//, '')).filter((p) => ctx.fileByPath.has(p));
-    const entryPoints = c.entryPoints?.map((p) => p.replace(/^\.?\//, '')).filter((p) => ctx.fileByPath.has(p));
-    components.push({ ...c, id, paths, keyFiles, entryPoints });
-  }
-  const connections: Connection[] = [];
-  const seen = new Set<string>();
-  for (const e of raw.connections) {
-    const from = remap.get(e.from) ?? remap.get(slug(e.from));
-    const to = remap.get(e.to) ?? remap.get(slug(e.to));
-    if (!from || !to || from === to) continue;
-    let id = `${from}--${to}`;
-    for (let i = 2; seen.has(id); i++) id = `${from}--${to}-${i}`;
-    seen.add(id);
-    const evidence = cleanRefs(ctx, e.evidence);
-    const { from: _f, to: _t, evidence: _e, ...rest } = e;
-    // Verified only when the cited line is an import or infrastructure call found by static analysis.
-    const verified = evidence.some((r) => {
-      const fx = ctx.facts?.get(r.path);
-      return r.startLine != null && !!fx && [...fx.imports, ...fx.infra].some((x) => x.line >= r.startLine! && x.line <= (r.endLine ?? r.startLine!));
-    });
-    connections.push({ ...rest, id, from, to, evidence, confidence: verified ? 'verified' : 'inferred' });
-  }
-  return { overview: raw.overview, components, connections };
-}
-
-export async function analyzeArchitecture(ctx: RepoContext): Promise<Architecture> {
-  const heuristic = heuristicArchitecture(ctx);
-  if (ctx.llm.name === 'mock') return heuristic;
-  const toLlmShape = () => ({
-    overview: heuristic.overview,
-    components: heuristic.components,
-    connections: heuristic.connections.map(({ id: _id, ...rest }) => rest),
-  });
-  const raw = await jsonWithFallback(
-    ctx.llm,
-    {
-      name: 'architecture',
-      maxTokens: 16_384,
-      system:
-        'You are a principal software architect. From the static-analysis facts provided, produce an accurate component-level architecture of the repository for an interactive diagram. ' +
-        'Group modules into top-level components by responsibility, not just by folder. Include external systems the code talks to (databases, caches, queues, third-party APIs, the browser/user if relevant) as components with empty paths. ' +
-        'Every connection must describe a real interaction supported by the import edges or infrastructure touch points, with evidence taken from the given file:line samples. Prefer kinds: http for network calls, db for persistence, queue/event for async messaging, calls for in-process calls.',
-      messages: [{ role: 'user', content: architecturePrompt(ctx) }],
-      schema: LlmArchSchema,
-      heuristic: toLlmShape,
-    },
-    ctx.warn,
-  );
-  const draft = normalize(ctx, raw);
-  return draft.components.length ? draft : heuristic;
-}
-
-/** Map every file to the component whose path prefix matches most specifically. */
-export function assignFilesToComponents(ctx: RepoContext, arch: Architecture): Map<string, string> {
-  const prefixes = arch.components.flatMap((c) => c.paths.map((p) => ({ p, id: c.id }))).sort((a, b) => b.p.length - a.p.length);
-  const m = new Map<string, string>();
-  for (const f of ctx.files) {
-    const hit = prefixes.find(({ p }) => f.path === p || f.path.startsWith(p + '/'));
-    if (hit) m.set(f.path, hit.id);
-  }
-  return m;
+  return { architecture: { overview, components, connections }, owner };
 }

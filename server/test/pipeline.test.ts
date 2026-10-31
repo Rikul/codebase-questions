@@ -120,8 +120,8 @@ describe('analysis pipeline (offline provider)', () => {
   });
 });
 
-describe('background architecture synthesis', () => {
-  it('publishes insights before synthesis and preserves them when architecture changes', async () => {
+describe('background code review', () => {
+  it('publishes the diagram and insights before the review, which runs last', async () => {
     const db = openDb(':memory:');
     db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('background', 'sample', 'https://github.com/acme/sample', 'running')`).run();
     const mock = new MockProvider();
@@ -131,11 +131,9 @@ describe('background architecture synthesis', () => {
     const resultsReady = new Promise<void>((resolve) => { ready = resolve; });
     const llm = Object.create(mock) as import('../src/llm/provider.js').LLMProvider;
     Object.defineProperty(llm, 'name', { value: 'test' });
-    llm.completeJSON = async <T,>(opts: import('../src/llm/provider.js').JSONOptions<T>): Promise<T> => {
-      if (opts.name !== 'architecture') return mock.completeJSON(opts);
-      await blocked;
-      const raw = opts.heuristic!() as any;
-      return opts.schema.parse({ ...raw, overview: 'Background architecture complete', components: raw.components.map((c: any) => ({ ...c, id: `new-${c.id}` })), connections: [] });
+    llm.runAgent = async (opts) => {
+      if (opts.final?.name === 'review') await blocked;
+      return mock.runAgent(opts);
     };
     const stages: string[] = [];
     const progress: number[] = [];
@@ -144,29 +142,37 @@ describe('background architecture synthesis', () => {
     const count = (table: string) => (db.prepare(`SELECT count(*) n FROM ${table} WHERE repo_id='background'`).get() as { n: number }).n;
     try {
       expect(count('insights')).toBeGreaterThan(0);
-      expect(stages.indexOf('architecture')).toBeGreaterThan(stages.indexOf('store'));
-      expect(progress[stages.indexOf('store')]).toBeCloseTo(7 / 10);
-      expect(progress[stages.indexOf('architecture')]).toBeCloseTo(8 / 10);
-      expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
-      // A user action performed while synthesis is running must survive its completion.
-      db.prepare(`UPDATE insights SET title='User-visible result' WHERE repo_id='background' AND category!='architecture'`).run();
-      // Diagram answers cached against the initial diagram must not outlive it.
-      db.prepare(`INSERT INTO diagram_answers (repo_id, question, content) VALUES ('background', 'q', '{}')`).run();
+      expect(count('components')).toBeGreaterThan(0);
+      expect(count('reviews')).toBe(0);
+      expect(stages).not.toContain('architecture');
+      expect(progress[stages.indexOf('store')]).toBeCloseTo(7 / 9);
     } finally {
       release();
     }
-    const { architecture } = await analysis;
-    expect(stages.lastIndexOf('review')).toBeGreaterThan(stages.lastIndexOf('architecture'));
+    await analysis;
+    expect(progress[stages.indexOf('review')]).toBeCloseTo(8 / 9);
+    expect(progress.every((value, i) => i === 0 || value >= progress[i - 1])).toBe(true);
     expect(count('reviews')).toBe(1);
-    expect(architecture.overview).toBe('Background architecture complete');
-    expect((db.prepare(`SELECT title FROM insights WHERE repo_id='background' AND category!='architecture' LIMIT 1`).get() as any).title).toBe('User-visible result');
-    expect(count('diagram_answers')).toBe(0);
-    // The architecture insight is rewritten from the synthesized diagram and still sorts first.
-    const archInsights = db.prepare(`SELECT body_md, position FROM insights WHERE repo_id='background' AND category='architecture' ORDER BY position`).all() as any[];
-    expect(archInsights[0].body_md).toBe('Background architecture complete');
-    const positions = (db.prepare(`SELECT position FROM insights WHERE repo_id='background' ORDER BY position`).all() as any[]).map((r) => r.position);
-    expect(positions).toEqual(positions.map((_, i) => i));
-    expect((db.prepare(`SELECT count(*) n FROM suggested_questions WHERE repo_id='background' AND category='architecture'`).get() as any).n).toBeGreaterThan(0);
+    db.close();
+  });
+});
+
+describe('insights from a model reply with missing optional fields', () => {
+  it('keeps the model insights when refs are left out or the severity is unexpected', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('lenient', 'sample', 'https://github.com/acme/sample', 'running')`).run();
+    const mock = new MockProvider();
+    const llm = Object.create(mock) as import('../src/llm/provider.js').LLMProvider;
+    Object.defineProperty(llm, 'name', { value: 'test' });
+    llm.completeJSON = async <T,>(opts: import('../src/llm/provider.js').JSONOptions<T>): Promise<T> => {
+      if (!opts.name.startsWith('insights_')) return mock.completeJSON(opts);
+      return opts.schema.parse({ insights: [{ kind: 'finding', title: `Model ${opts.name}`, bodyMd: 'x', severity: 'Medium' }] });
+    };
+    const warnings: string[] = [];
+    await analyzeDirectory(db, llm, null, 'lenient', FIXTURE, () => undefined, (w) => warnings.push(w));
+    expect(warnings.filter((w) => w.startsWith('insights_'))).toEqual([]);
+    const rows = db.prepare(`SELECT title, severity, refs FROM insights WHERE repo_id='lenient' AND category='security'`).all() as any[];
+    expect(rows).toEqual([{ title: 'Model insights_security', severity: null, refs: '[]' }]);
     db.close();
   });
 });

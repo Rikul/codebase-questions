@@ -5,17 +5,22 @@ import { jsonWithFallback } from '../llm/index.js';
 import type { RepoContext } from './context.js';
 import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, packageScripts, readmeIntro, truncate } from './context.js';
 
+// Optional pieces default instead of failing: rejecting a whole category's write-up because one
+// section left out its refs (or used an odd severity) would throw away an otherwise good answer.
 const InsightsOut = z.object({
   insights: z.array(
     z.object({
       kind: z.string().describe('section kind, e.g. overview, setup, entry-points, attack-surface, finding, public-api, library-usage'),
       title: z.string(),
       bodyMd: z.string().describe('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known'),
-      severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().describe('security findings only'),
-      refs: z.array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() })),
+      severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().catch(undefined).describe('security findings only'),
+      refs: z
+        .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))
+        .default([])
+        .describe('files this section is about (path plus line numbers when known)'),
     }),
   ),
-  questions: z.array(z.string()).describe('6-8 specific questions a user might ask next about this repository'),
+  questions: z.array(z.string()).default([]).describe('6-8 specific questions a user might ask next about this repository'),
 });
 type InsightsOut = z.infer<typeof InsightsOut>;
 

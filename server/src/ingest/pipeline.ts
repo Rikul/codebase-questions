@@ -3,13 +3,13 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import type { Architecture, JobEvent, RepoSummary } from '@cq/shared';
-import { analysisProgress } from '@cq/shared';
+import { analysisProgress, defaultView } from '@cq/shared';
 import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import { startReview } from '../agent/review.js';
-import { analyzeArchitecture, assignFilesToComponents, heuristicArchitecture } from '../analyze/architecture.js';
+import { staticArchitecture } from '../analyze/architecture.js';
 import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
@@ -64,7 +64,7 @@ export function initJobs(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider
   deps = { db, llm, embeddings };
   // Jobs interrupted by a restart are marked failed.
   db.prepare(`UPDATE jobs SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
-  db.prepare(`UPDATE repos SET status='ready', error='Background architecture synthesis or code review interrupted by server restart' WHERE status='enriching'`).run();
+  db.prepare(`UPDATE repos SET status='ready', error='Background code review interrupted by server restart' WHERE status='enriching'`).run();
   db.prepare(`UPDATE repos SET status='failed', error='Interrupted by server restart' WHERE status IN ('queued','running')`).run();
 }
 
@@ -136,10 +136,10 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => {
       warnings.push(w);
       // Detailed LLM failures are logged at their source; avoid logging raw response data here.
-      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|architecture|agent run failed|Embeddings failed|History indexing failed|Architecture synthesis failed|Code review)/.exec(w)?.[0] ?? 'analysis warning' });
+      log('warn', 'analysis.warning', { stage: 'analysis', warningType: /^(insights_(?:architecture|onboarding|security|api)|agent run failed|Embeddings failed|History indexing failed|Code review)/.exec(w)?.[0] ?? 'analysis warning' });
     }, history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
-      emit('architecture', 'Results available; synthesizing architecture and reviewing code in the background', analysisProgress('architecture'));
+      emit('review', 'Results available; reviewing the code in the background', analysisProgress('review'));
     });
     db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
     db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
@@ -280,14 +280,13 @@ export async function analyzeDirectory(
     }
   })();
 
-  const arch = heuristicArchitecture(ctx);
-  const fileComp = assignFilesToComponents(ctx, arch);
+  const { architecture: arch, owner: fileComp } = staticArchitecture(ctx);
 
   progress('insights', 'Writing architecture, onboarding, security and API insights', 0);
   ctx.progress = (m, p) => progress('insights', m, p);
-  const { insights, questions } = await analyzeInsights(ctx, arch);
+  const { insights, questions } = await analyzeInsights(ctx, defaultView(arch));
 
-  progress('store', 'Saving insights and initial diagram', 0);
+  progress('store', 'Saving insights and architecture diagram', 0);
   saveAnalysis(db, repoId, arch, insights, questions);
   const updMeta = db.prepare(`UPDATE files SET meta=json_set(coalesce(meta,'{}'), '$.component', ?) WHERE repo_id=? AND path=?`);
   db.transaction(() => {
@@ -295,29 +294,6 @@ export async function analyzeDirectory(
   })();
 
   onResultsReady();
-  progress('architecture', 'Synthesizing architecture in the background', 0);
-  ctx.progress = (m, p) => progress('architecture', m, p);
-  let architecture = arch;
-  try {
-    const synthesized = await analyzeArchitecture(ctx);
-    // The architecture insight was written from the heuristic diagram; rewrite it from the final one.
-    ctx.progress = (m) => progress('architecture', m, 0.9);
-    const archInsights = await analyzeInsights(ctx, synthesized, ['architecture']);
-    // Persist only architecture-derived results: users may already be reading or changing other results.
-    db.transaction(() => {
-      if (!db.prepare('SELECT 1 FROM repos WHERE id=?').get(repoId)) return;
-      saveArchitecture(db, repoId, synthesized);
-      replaceCategoryInsights(db, repoId, 'architecture', archInsights.insights, archInsights.questions);
-      const assignments = assignFilesToComponents(ctx, synthesized);
-      db.prepare(`UPDATE files SET meta=json_remove(coalesce(meta,'{}'), '$.component') WHERE repo_id=?`).run(repoId);
-      for (const [p, c] of assignments) updMeta.run(c, repoId, p);
-    })();
-    architecture = synthesized;
-  } catch (err) {
-    log('warn', 'analysis.architecture.failed', errorDetails(err));
-    warn(`Architecture synthesis failed: ${(err as Error).message}; keeping static architecture`);
-  }
-
   progress('review', 'Reviewing the codebase in the background', 0);
   let steps = 0;
   try {
@@ -332,26 +308,7 @@ export async function analyzeDirectory(
     log('warn', 'analysis.review.failed', errorDetails(err));
     warn(`Code review failed: ${(err as Error).message}`);
   }
-  return { architecture };
-}
-
-/** Swap one category's insights and suggested questions, keeping it ahead of the other categories. */
-function replaceCategoryInsights(
-  db: DB,
-  repoId: string,
-  category: string,
-  insights: { kind: string; title: string; bodyMd: string; severity?: string; refs: unknown[] }[],
-  questions: { question: string }[],
-) {
-  db.prepare('DELETE FROM insights WHERE repo_id=? AND category=?').run(repoId, category);
-  db.prepare('DELETE FROM suggested_questions WHERE repo_id=? AND category=?').run(repoId, category);
-  const rest = db.prepare('SELECT id FROM insights WHERE repo_id=? ORDER BY position').all(repoId) as { id: number }[];
-  const pos = db.prepare('UPDATE insights SET position=? WHERE id=?');
-  rest.forEach((r, n) => pos.run(insights.length + n, r.id));
-  const ii = db.prepare('INSERT INTO insights (repo_id, category, kind, title, body_md, severity, refs, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-  insights.forEach((i, n) => ii.run(repoId, category, i.kind, i.title, i.bodyMd, i.severity ?? null, JSON.stringify(i.refs), n));
-  const iq = db.prepare('INSERT INTO suggested_questions (repo_id, category, question) VALUES (?, ?, ?)');
-  for (const q of questions) iq.run(repoId, category, q.question);
+  return { architecture: arch };
 }
 
 export function saveAnalysis(
@@ -382,7 +339,7 @@ function clearArchitecture(db: DB, repoId: string) {
   for (const table of ['connections', 'components', 'diagram_answers']) db.prepare(`DELETE FROM ${table} WHERE repo_id=?`).run(repoId);
 }
 
-/** Replace the diagram. Also used on its own when background synthesis publishes a new architecture. */
+/** Replace the diagram. */
 function saveArchitecture(db: DB, repoId: string, arch: Architecture) {
   clearArchitecture(db, repoId);
 

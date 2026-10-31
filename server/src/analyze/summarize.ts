@@ -81,7 +81,7 @@ export async function summarizeFiles(
   let cur: ScannedFile[] = [];
   let size = 0;
   for (const f of todo) {
-    const len = Math.min(f.content.length, 12_000);
+    const len = Math.min(f.content.length, 16_000);
     if (cur.length && (size + len > 28_000 || cur.length >= 8)) {
       batches.push(cur);
       cur = [];
@@ -98,7 +98,7 @@ export async function summarizeFiles(
     batches.map((batch) =>
       limit(async () => {
         const body = batch
-          .map((f) => `=== FILE: ${f.path} (${f.lines} lines) ===\n${truncate(f.content, 12_000)}`)
+          .map((f) => `=== FILE: ${f.path} (${f.lines} lines) ===\n${truncate(f.content, 16_000)}`)
           .join('\n\n');
         let failed = false;
         const res = await jsonWithFallback(
@@ -108,7 +108,7 @@ export async function summarizeFiles(
             fast: true,
             maxTokens: 400 * batch.length + 500,
             system:
-              'You are a senior engineer documenting an unfamiliar codebase. For each file, write a dense 2-4 sentence summary: its responsibility, the key functions/classes it defines, what it depends on, and anything notable for security or integration (I/O, network, auth, persistence). Be specific; do not speculate beyond the code.',
+              'You are a senior engineer documenting a codebase. For each file, write a dense 2-4 sentence summary: its responsibility, the key functions/classes it defines, what it depends on, and anything notable for security or integration (I/O, network, auth, persistence). Be specific; do not speculate beyond the code.',
             messages: [{ role: 'user', content: `Repository: ${ctx.repoName}\n\n${body}` }],
             schema: SummariesSchema,
             heuristic: () => ({ files: batch.map((f) => ({ path: f.path, summary: heuristicSummary(ctx, f) })) }),

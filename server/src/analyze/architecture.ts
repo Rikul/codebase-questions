@@ -41,7 +41,6 @@ const LlmArchSchema = z.object({
       protocol: z.string().optional().describe('e.g. "in-process call", "REST/HTTP", "SQL", "Redis", "Kafka topic orders", "WebSocket"'),
       dataExchanged: z.string().optional().describe('what flows over this edge, e.g. "User records", "job payloads"'),
       direction: z.enum(['request', 'response', 'bidirectional']).optional().catch(undefined),
-      confidence: z.enum(['verified', 'inferred']).optional().catch(undefined).describe('verified = you read code that performs this interaction'),
     }),
   ),
 });
@@ -268,7 +267,12 @@ export function normalize(ctx: RepoContext, raw: z.infer<typeof LlmArchSchema>):
     seen.add(id);
     const evidence = cleanRefs(ctx, e.evidence);
     const { from: _f, to: _t, evidence: _e, ...rest } = e;
-    connections.push({ ...rest, id, from, to, evidence, confidence: evidence.length ? (e.confidence ?? 'inferred') : 'inferred' });
+    // Verified only when the cited line is an import or infrastructure call found by static analysis.
+    const verified = evidence.some((r) => {
+      const fx = ctx.facts?.get(r.path);
+      return r.startLine != null && !!fx && [...fx.imports, ...fx.infra].some((x) => x.line >= r.startLine! && x.line <= (r.endLine ?? r.startLine!));
+    });
+    connections.push({ ...rest, id, from, to, evidence, confidence: verified ? 'verified' : 'inferred' });
   }
   return { overview: raw.overview, components, connections };
 }

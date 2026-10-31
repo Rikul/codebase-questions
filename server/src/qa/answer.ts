@@ -57,7 +57,7 @@ async function classify(llm: LLMProvider, q: string): Promise<Category> {
   try {
     const out = await llm.complete({
       fast: true,
-      maxTokens: 10,
+      maxTokens: 512, // room for models that reason before replying
       system: `Classify the developer question into exactly one category id: architecture (system structure/interactions), onboarding (getting oriented, running, conventions), security (attack surface, vulnerabilities), api (using interfaces/libraries, runtime behavior). Reply with only the id.`,
       messages: [{ role: 'user', content: q }],
     });
@@ -69,7 +69,7 @@ async function classify(llm: LLMProvider, q: string): Promise<Category> {
 }
 
 const PERSONAS: Record<Category, string> = {
-  architecture: 'Explain structure and interactions between components. Name the components, the direction of calls/data, and the protocols involved. A short step-by-step flow or an ASCII/mermaid-free bullet diagram helps.',
+  architecture: 'Explain structure and interactions between components. Name the components, the direction of calls/data, and the protocols involved. A short step-by-step flow as bullets helps.',
   onboarding: 'Answer like a helpful senior teammate onboarding a new engineer: practical, concrete, with exact commands, file paths and a suggested next step.',
   security: 'Answer as an application security reviewer. Identify attack surfaces, trust boundaries and vulnerable patterns. Distinguish confirmed issues (with cited code) from things to verify. Suggest concrete mitigations.',
   api: 'Explain how to use the interfaces and libraries: signatures, required setup, a minimal code example, runtime behavior (sync/async, errors, retries, side effects) and gotchas.',
@@ -178,7 +178,7 @@ export async function* answerQuestion(
   const system = [
     `You are an expert on the ${repo.name} codebase, answering a question in the category "${CATEGORY_LABELS[category]}".`,
     PERSONAS[category],
-    'Use ONLY the provided context; if it is insufficient, say what is missing and where to look. Cite code inline using the exact format [path/to/file.ext:START-END] with line numbers from the retrieved code. Use GitHub-flavored markdown. Be concise and specific.',
+    'Ground every claim in the provided context or in code you read with tools; if you still cannot answer, say what is missing and where to look. Cite code inline using the exact format [path/to/file.ext:START-END] with line numbers from code you have seen. Use GitHub-flavored markdown. Be concise and specific.',
     focus.text,
   ]
     .filter(Boolean)

@@ -376,7 +376,7 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
       label: (i) => `Reading commit ${String(i.sha).slice(0, 8)}`,
       run: async (i) => {
         const c = await commitDetails(ix.db, ix.repoId, i.sha, i.path ? safeGitPath(i.path) : undefined); // may be an old name
-        return c.available ? { ...c, patch: c.patch.slice(0, 12_000) } : c.reason;
+        return c.available ? { ...c, patch: c.patch.slice(0, 16_000) } : c.reason;
       },
     },
     {

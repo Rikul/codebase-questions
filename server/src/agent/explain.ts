@@ -25,7 +25,7 @@ export function agentEventMapper(emit: (e: AgentStreamEvent) => void) {
   };
 }
 
-const SYSTEM = `You are a senior engineer explaining one part of an unfamiliar codebase to a colleague.
+const SYSTEM = `You are a senior engineer explaining one part of a codebase to a colleague.
 ${AGENT_GUIDANCE}
 
 Answer six questions and submit them with submit_explanation:

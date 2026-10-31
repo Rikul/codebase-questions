@@ -10,7 +10,7 @@ const InsightsOut = z.object({
     z.object({
       kind: z.string().describe('section kind, e.g. overview, setup, entry-points, attack-surface, finding, public-api, library-usage'),
       title: z.string(),
-      bodyMd: z.string().describe('GitHub-flavored markdown; reference code as `path/to/file.ts:12`'),
+      bodyMd: z.string().describe('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known'),
       severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().describe('security findings only'),
       refs: z.array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() })),
     }),
@@ -363,7 +363,7 @@ export async function analyzeInsights(
               {
                 name: `insights_${cat}`,
                 maxTokens: 16_384,
-                system: `You are an expert engineer producing the "${CATEGORY_LABELS[cat]}" section of a codebase knowledge base. ${GUIDES[cat]} Ground every statement in the provided facts and cite files as refs (path plus line numbers when known). Be concrete and concise; prefer bullet lists and tables.`,
+                system: `You are an expert engineer producing the "${CATEGORY_LABELS[cat]}" section of a codebase knowledge base. ${GUIDES[cat]} Ground every statement in the provided facts and cite files as refs. Give line numbers only when they appear in the facts (routes, signals, symbols, numbered source); never guess them. Be concrete and concise; prefer bullet lists and tables.`,
                 messages: [{ role: 'user', content: categoryFacts(ctx, cat, arch) }],
                 schema: InsightsOut,
                 heuristic,

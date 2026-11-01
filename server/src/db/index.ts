@@ -296,3 +296,16 @@ export function clearAnalysis(db: DB, repoId: string) {
   });
   tx();
 }
+
+/**
+ * Shrink the database files after a large delete: VACUUM rebuilds the file without the freed pages
+ * (SQLite otherwise keeps them for reuse, deleted bytes included), and the checkpoint truncates the
+ * WAL. It blocks other queries while it runs, so call it after responding.
+ */
+export function compactDb(db: DB): { beforeMb: number; afterMb: number } {
+  const size = () => (db.pragma('page_count', { simple: true }) as number) * (db.pragma('page_size', { simple: true }) as number) / 1024 / 1024;
+  const beforeMb = size();
+  db.exec('VACUUM');
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  return { beforeMb, afterMb: size() };
+}

@@ -8,7 +8,8 @@ import type { Auth } from '../auth.js';
 import { COOKIE_NAME, mintCode } from '../auth.js';
 import { config } from '../config.js';
 import type { DB } from '../db/index.js';
-import { json } from '../db/index.js';
+import { compactDb, json } from '../db/index.js';
+import { errorDetails, log } from '../logging/index.js';
 import { exportProject, importProject } from '../export/export.js';
 import { createRepo, deleteRepo, enqueue, jobEvents, rowToRepo } from '../ingest/pipeline.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
@@ -144,6 +145,16 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     deleteRepo(db, req.params.id);
     invalidateVectors(req.params.id);
     res.json({ ok: true });
+    // Reclaim the space after responding (VACUUM blocks other queries while it runs).
+    setImmediate(() => {
+      const started = Date.now();
+      try {
+        const { beforeMb, afterMb } = compactDb(db);
+        log('info', 'db.compacted', { durationMs: Date.now() - started, beforeMb: Math.round(beforeMb), afterMb: Math.round(afterMb) });
+      } catch (err) {
+        log('warn', 'db.compact.failed', errorDetails(err));
+      }
+    });
   });
 
   r.post('/repos/:id/reanalyze', (req, res) => {

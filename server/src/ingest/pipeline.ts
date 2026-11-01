@@ -23,6 +23,8 @@ import type { FileFacts } from './parse.js';
 import { buildRefs } from './refs.js';
 import type { HistoryInfo } from '../history/git.js';
 import { indexHistory, repoHistorySummary, storeFileHistorySummaries } from '../history/index.js';
+import { classifyCommits } from '../history/classify.js';
+import { listCommits, repoStats } from '../history/commits.js';
 import { repoDir } from '../paths.js';
 import { scanRepo } from './scan.js';
 
@@ -276,7 +278,14 @@ export async function analyzeDirectory(
   ctx.history = repoHistorySummary(db, repoId);
   progress('summarize', 'Summarizing key files', 0);
   ctx.progress = (m, p) => progress('summarize', m, p);
-  const fromModel = await summarizeFiles(ctx, { max: config.ingest.maxLlmFiles, concurrency: config.llm.concurrency, cached });
+  // Commit types for messages the rules could not classify run alongside the summaries.
+  const [fromModel] = await Promise.all([
+    summarizeFiles(ctx, { max: config.ingest.maxLlmFiles, concurrency: config.llm.concurrency, cached }),
+    classifyCommits(db, llm, repoId, { concurrency: config.llm.concurrency, warn }).catch((err) => {
+      log('warn', 'analysis.commit_types.failed', errorDetails(err));
+      return 0;
+    }),
+  ]);
   const updSummary = db.prepare('UPDATE files SET summary=?, summary_hash=? WHERE repo_id=? AND path=?');
   db.transaction(() => {
     for (const f of files) {
@@ -285,6 +294,7 @@ export async function analyzeDirectory(
     }
   })();
 
+  ctx.repo = { stats: repoStats(db, repoId), recent: listCommits(db, repoId, { limit: 40 }).commits };
   const { architecture: staticArch, owner: fileComp } = staticArchitecture(ctx);
   // Readable labels for the static components (names and structure stay as found in the code).
   progress('insights', 'Naming diagram components', 0);

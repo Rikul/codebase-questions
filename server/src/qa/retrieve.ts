@@ -31,6 +31,7 @@ const CATEGORY_TERMS: Record<Category, string[]> = {
   onboarding: ['readme', 'main', 'setup', 'install', 'config', 'start'],
   security: ['auth', 'token', 'password', 'session', 'secret', 'validate', 'sanitize', 'permission', 'crypto', 'jwt', 'cookie', 'csrf', 'cors'],
   api: ['export', 'client', 'request', 'response', 'handler', 'route', 'interface', 'options'],
+  repository: ['readme', 'changelog', 'release', 'version', 'license', 'contributing'],
 };
 
 const vecCache = new Map<string, { ids: number[]; vecs: Float32Array[] }>();

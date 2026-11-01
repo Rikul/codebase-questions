@@ -10,6 +10,7 @@ const CAT_DESC = {
   onboarding: 'Setup steps, entry points, a suggested reading order and project conventions.',
   security: 'Attack surface, auth, injection sinks and secrets, with severity-ranked findings.',
   api: 'Public interfaces, HTTP endpoints and how third-party libraries are used at runtime.',
+  repository: 'Size, languages, activity and contributors, how the code evolved, and a commit explorer filtered by type and size.',
 };
 
 export function useJobProgress(jobId: string | null, onDone?: () => void) {

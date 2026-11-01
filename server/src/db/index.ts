@@ -197,6 +197,11 @@ CREATE TABLE IF NOT EXISTS commits (
   date TEXT NOT NULL,
   subject TEXT NOT NULL,
   body TEXT,
+  added INTEGER,
+  deleted INTEGER,
+  files INTEGER,
+  type TEXT,
+  type_source TEXT,
   PRIMARY KEY (repo_id, sha)
 );
 CREATE INDEX IF NOT EXISTS commits_seq ON commits(repo_id, seq);
@@ -263,6 +268,12 @@ function migrate(db: DB) {
   // Extra architecture fields (layer, group, protocol, confidence, ...) are stored as JSON.
   add('components', 'extra', "TEXT NOT NULL DEFAULT '{}'");
   add('connections', 'extra', "TEXT NOT NULL DEFAULT '{}'");
+  // Commit stats and type (Repository tab).
+  add('commits', 'added', 'INTEGER');
+  add('commits', 'deleted', 'INTEGER');
+  add('commits', 'files', 'INTEGER');
+  add('commits', 'type', 'TEXT');
+  add('commits', 'type_source', 'TEXT');
   // Flows (sequence diagrams) were removed.
   db.exec('DROP TABLE IF EXISTS flows');
 }

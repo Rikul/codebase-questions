@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export * from './archView';
 
-export const CATEGORIES = ['architecture', 'onboarding', 'security', 'api'] as const;
+export const CATEGORIES = ['architecture', 'onboarding', 'security', 'api', 'repository'] as const;
 export const CategorySchema = z.enum(CATEGORIES);
 export type Category = z.infer<typeof CategorySchema>;
 
@@ -11,6 +11,7 @@ export const CATEGORY_LABELS: Record<Category, string> = {
   onboarding: 'Code onboarding',
   security: 'Security',
   api: 'API & library integration',
+  repository: 'Repository & history',
 };
 
 export const COMPONENT_TYPES = [
@@ -323,6 +324,56 @@ export interface ReviewRequest {
 
 export type ReviewEvent = AgentStreamEvent | { type: 'result'; path: string | null; review: Review; cached: boolean; createdAt: string };
 
+// ---------- Repository: commit types, sizes and stats ----------
+
+export const COMMIT_TYPES = ['feat', 'fix', 'refactor', 'chore', 'docs', 'test', 'other'] as const;
+export type CommitType = (typeof COMMIT_TYPES)[number];
+
+/** Commit size by lines changed (added + deleted); max is exclusive. */
+export const SIZE_BUCKETS = [
+  { id: 'XS', label: 'XS · <10', min: 0, max: 10 },
+  { id: 'S', label: 'S · 10–49', min: 10, max: 50 },
+  { id: 'M', label: 'M · 50–249', min: 50, max: 250 },
+  { id: 'L', label: 'L · 250–999', min: 250, max: 1000 },
+  { id: 'XL', label: 'XL · 1000+', min: 1000, max: Infinity },
+] as const;
+export type SizeBucket = (typeof SIZE_BUCKETS)[number]['id'];
+
+export interface CommitListItem {
+  sha: string;
+  author: string;
+  date: string;
+  subject: string;
+  type: CommitType;
+  added: number;
+  deleted: number;
+  files: number;
+}
+
+export interface CommitList {
+  total: number;
+  commits: CommitListItem[];
+}
+
+export interface RepoStats {
+  files: number;
+  lines: number;
+  languages: { lang: string; files: number; lines: number }[];
+  history: null | {
+    commits: number;
+    total: number;
+    shallow: boolean;
+    capped: boolean;
+    first: string | null;
+    last: string | null;
+    authors: { author: string; commits: number; added: number; deleted: number }[];
+    months: { month: string; commits: number; added: number; deleted: number }[];
+    types: Record<CommitType, number>;
+    sizes: Record<SizeBucket, number>;
+    biggest: CommitListItem[];
+  };
+}
+
 // ---------- Export format ----------
 
 export const EXPORT_FORMAT = 'codebase-questions/v1';
@@ -368,7 +419,12 @@ export const ExportSchema = z.object({
   reviews: z.array(z.object({ key: z.string(), version: z.string(), content: z.string(), createdAt: z.string() })).optional(),
   history: z
     .object({
-      commits: z.array(z.object({ sha: z.string(), seq: z.number(), author: z.string(), date: z.string(), subject: z.string(), body: z.string().nullable() })),
+      commits: z.array(
+        z.object({
+          sha: z.string(), seq: z.number(), author: z.string(), date: z.string(), subject: z.string(), body: z.string().nullable(),
+          type: z.string().nullable().optional(), typeSource: z.string().nullable().optional(), added: z.number().nullable().optional(), deleted: z.number().nullable().optional(), files: z.number().nullable().optional(),
+        }),
+      ),
       fileCommits: z.array(z.object({ path: z.string(), sha: z.string(), status: z.string(), oldPath: z.string().nullable(), added: z.number().nullable(), deleted: z.number().nullable() })),
       shallow: z.boolean(),
       root: z.string().nullable(),

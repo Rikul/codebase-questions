@@ -1,12 +1,13 @@
 import { z } from 'zod';
-import { defaultView } from '@cq/shared';
+import { CATEGORIES, COMMIT_TYPES, defaultView } from '@cq/shared';
+import { listCommits } from '../history/commits.js';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import type { AgentTool } from '../llm/agent.js';
 import type { EmbeddingProvider } from '../llm/index.js';
 import { retrieve } from '../qa/retrieve.js';
 import { fileContent, getArchitecture } from '../routes/queries.js';
-import { fileHistory } from '../history/index.js';
+import { fileHistory, historyAvailable } from '../history/index.js';
 import { safeGitPath } from '../history/git.js';
 import { blame, commitDetails, searchHistory, symbolHistory } from '../history/symbol.js';
 
@@ -391,6 +392,34 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
       },
     },
     {
+      name: 'list_commits',
+      description:
+        'List indexed commits, newest first, filtered by type (feat, fix, refactor, chore, docs, test, other), size in lines changed (min/max or buckets XS <10, S <50, M <250, L <1000, XL 1000+), author, a file or directory path, ISO date range, or text in the message. Returns the total and each commit with sha, date, author, type, lines added/deleted and files changed. Sort "newest" (default), "oldest" or "largest" (biggest changes first).',
+      schema: z.object({
+        types: z.array(z.enum(COMMIT_TYPES)).optional(),
+        sizes: z.array(z.enum(['XS', 'S', 'M', 'L', 'XL'])).optional(),
+        min_lines: z.number().int().optional(),
+        max_lines: z.number().int().optional(),
+        author: z.string().optional(),
+        path: z.string().optional(),
+        since: z.string().optional(),
+        until: z.string().optional(),
+        text: z.string().optional(),
+        sort: z.enum(['newest', 'oldest', 'largest']).optional(),
+        limit: z.number().int().optional(),
+      }),
+      label: (i) => `Listing commits${i.types?.length ? ` (${i.types.join(', ')})` : ''}${i.path ? ` in ${i.path}` : ''}`,
+      run: async (i) => {
+        if (!historyAvailable(ix.db, ix.repoId)) return 'No git history is available for this repository.';
+        const r = listCommits(ix.db, ix.repoId, {
+          types: i.types, sizes: i.sizes, minLines: i.min_lines, maxLines: i.max_lines, author: i.author,
+          path: i.path ? safeGitPath(i.path) : undefined, since: i.since, until: i.until, q: i.text,
+          sort: i.sort, limit: Math.min(100, i.limit ?? 40),
+        });
+        return { total: r.total, commits: r.commits.map((c) => ({ ...c, sha: c.sha.slice(0, 10), date: c.date.slice(0, 10) })) };
+      },
+    },
+    {
       name: 'get_architecture',
       description: 'The component diagram as first shown (packages opened up to their modules): components with paths, parent and connections. Imports into widely used helper modules and edges implied by longer paths are left out.',
       schema: z.object({}),
@@ -406,7 +435,7 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
     {
       name: 'get_insights',
       description: 'Knowledge-base write-ups for a category: architecture, onboarding, security or api.',
-      schema: z.object({ category: z.enum(['architecture', 'onboarding', 'security', 'api']) }),
+      schema: z.object({ category: z.enum(CATEGORIES) }),
       label: (i) => `Reading ${i.category} notes`,
       run: async (i) =>
         (ix.db.prepare('SELECT title, body_md FROM insights WHERE repo_id=? AND category=? ORDER BY position').all(ix.repoId, i.category) as any[])

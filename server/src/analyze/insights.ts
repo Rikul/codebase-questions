@@ -25,6 +25,8 @@ const InsightsOut = z.object({
 type InsightsOut = z.infer<typeof InsightsOut>;
 
 const GUIDES: Record<Category, string> = {
+  repository:
+    'Describe the repository as a project, from its facts and git history. Write sections: "At a glance" (what it is, size, languages, maturity and how active it is), "Activity over time" (trends from the monthly activity: busy and quiet periods, recent pace), "Contributors" (who works on it and on what, from authors and lines changed), "How the codebase evolved" (main phases, inferred from commit types and subjects over time; cite commits by short sha), "Hotspots & churn" (most-changed files and what that suggests), and "Recent changes" (what the latest commits did). Use only the facts given; if history is shallow or capped, say the picture covers only the indexed commits. Skip history sections when there is no git history.',
   architecture:
     'Write sections: "System overview", "Request / data flow" (trace one representative flow end to end, step by step with file refs), "Key design decisions & patterns", "Deployment & runtime" (containers, processes, config), and "Extension points".',
   onboarding:
@@ -117,7 +119,31 @@ function categoryFacts(ctx: RepoContext, cat: Category, arch: Architecture): str
       `# Key files\n${keyFiles}`,
     );
   }
+  if (cat === 'repository') base.push(...repositoryFacts(ctx));
   return base.filter(Boolean).join('\n\n');
+}
+
+const fmt = (n: number) => n.toLocaleString('en-US');
+
+function repositoryFacts(ctx: RepoContext): string[] {
+  const r = ctx.repo;
+  const out = [
+    ctx.readme ? `# README (intro)\n${readmeIntro(ctx.readme, 1500)}` : '',
+    r ? `# Size\n${fmt(r.stats.files)} files, ${fmt(r.stats.lines)} lines. Languages: ${r.stats.languages.map((l) => `${l.lang} (${l.files} files, ${fmt(l.lines)} lines)`).join(', ')}` : '',
+    `# Dependencies\n${ctx.deps.filter((d) => !d.dev).length} runtime, ${ctx.deps.filter((d) => d.dev).length} dev`,
+  ];
+  const h = r?.stats.history;
+  if (!h) return [...out, '# Git history\n(not available)'];
+  out.push(
+    historyBlock(ctx),
+    `# Commit types\n${Object.entries(h.types).filter(([, n]) => n).map(([t, n]) => `${t}: ${n}`).join(', ')}`,
+    `# Commit sizes (lines changed)\n${Object.entries(h.sizes).map(([s, n]) => `${s}: ${n}`).join(', ')}`,
+    `# Activity per month (commits, +added/-deleted)\n${h.months.slice(-36).map((m) => `${m.month}: ${m.commits} (+${m.added}/-${m.deleted})`).join('\n')}`,
+    `# Authors (commits, lines added/deleted)\n${h.authors.map((a) => `- ${a.author}: ${a.commits} commits, +${fmt(a.added)}/-${fmt(a.deleted)}`).join('\n')}`,
+    `# Biggest commits\n${h.biggest.map((c) => `- ${c.sha.slice(0, 8)} ${c.date.slice(0, 10)} [${c.type}] +${c.added}/-${c.deleted} ${c.author}: ${c.subject}`).join('\n')}`,
+    `# Last ${r!.recent.length} commits\n${r!.recent.map((c) => `- ${c.sha.slice(0, 8)} ${c.date.slice(0, 10)} [${c.type}] +${c.added}/-${c.deleted} ${c.author}: ${c.subject}`).join('\n')}`,
+  );
+  return out;
 }
 
 function historyBlock(ctx: RepoContext): string {
@@ -348,13 +374,46 @@ export function heuristicInsights(ctx: RepoContext, cat: Category, arch: Archite
       'How are clients for external libraries initialized and shared?',
     );
   }
+  if (cat === 'repository') {
+    const r = ctx.repo;
+    const h = r?.stats.history;
+    const langs = r?.stats.languages.slice(0, 5).map((l) => `${l.lang} (${fmt(l.lines)} lines)`).join(', ');
+    out.push({
+      kind: 'overview',
+      title: 'At a glance',
+      bodyMd: [
+        ctx.readme ? readmeIntro(ctx.readme, 600) : '',
+        r ? `${fmt(r.stats.files)} files and ${fmt(r.stats.lines)} lines${langs ? `, mostly ${langs}` : ''}.` : '',
+        h ? `${fmt(h.commits)} commits indexed${h.total > h.commits ? ` of ${fmt(h.total)}` : ''} from ${h.first?.slice(0, 10)} to ${h.last?.slice(0, 10)} by ${h.authors.length} author${h.authors.length === 1 ? '' : 's'}${h.shallow ? ' (shallow clone: older history was not fetched)' : ''}.` : 'No git history is available for this repository.',
+      ].filter(Boolean).join('\n\n'),
+      refs: [],
+    });
+    if (h) {
+      const recentMonths = h.months.slice(-6);
+      out.push({
+        kind: 'activity',
+        title: 'Activity over time',
+        bodyMd: `| Month | Commits | Lines +/− |\n|---|---|---|\n${recentMonths.map((m) => `| ${m.month} | ${m.commits} | +${fmt(m.added)} / −${fmt(m.deleted)} |`).join('\n')}\n\nCommit types: ${Object.entries(h.types).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(', ')}.`,
+        refs: [],
+      });
+      out.push({ kind: 'contributors', title: 'Contributors', bodyMd: h.authors.map((a) => `- **${a.author}**: ${a.commits} commits, +${fmt(a.added)} / −${fmt(a.deleted)} lines`).join('\n'), refs: [] });
+      const hot = ctx.history?.hotspots ?? [];
+      if (hot.length) out.push({ kind: 'hotspots', title: 'Hotspots & churn', bodyMd: hot.map((x: any) => `- \`${x.path}\`: ${x.n} commits, ${fmt(x.churn ?? 0)} lines changed`).join('\n'), refs: hot.slice(0, 6).map((x: any) => ref(x.path)) });
+      out.push({ kind: 'recent', title: 'Recent changes', bodyMd: (r?.recent ?? []).slice(0, 12).map((c) => `- \`${c.sha.slice(0, 8)}\` ${c.date.slice(0, 10)} **${c.type}** ${c.subject} (${c.author})`).join('\n'), refs: [] });
+    }
+    q.push(
+      ...(h
+        ? ['What changed in the last month?', 'Who are the main contributors and what do they work on?', 'What were the biggest refactors?', 'Which files change most often, and why?', 'What bugs were fixed recently?', 'How has the project evolved over time?']
+        : ['What is this project and how big is it?', 'Which languages and dependencies does it use?']),
+    );
+  }
   return { insights: out, questions: q };
 }
 
 export async function analyzeInsights(
   ctx: RepoContext,
   arch: Architecture,
-  cats: Category[] = ['architecture', 'onboarding', 'security', 'api'],
+  cats: Category[] = ['architecture', 'onboarding', 'security', 'api', 'repository'],
 ): Promise<{ insights: Insight[]; questions: SuggestedQuestion[] }> {
   let completed = 0;
   const results = await Promise.all(

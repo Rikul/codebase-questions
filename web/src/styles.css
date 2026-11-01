@@ -42,6 +42,8 @@
   --sev-medium: #e69410;
   --sev-low: #3b82f6;
   --sev-info: #7a8091;
+  /* Categorical chart slots (validated: dataviz palette, light surface). Text never uses these. */
+  --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-other: #9a9ca3;
   color-scheme: light;
 }
 
@@ -62,6 +64,7 @@
     --edge-calls: #6f7689;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-other: #6b6f7b;
     color-scheme: dark;
   }
 }
@@ -81,6 +84,7 @@
   --edge-calls: #6f7689;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-other: #6b6f7b;
   color-scheme: dark;
 }
 
@@ -270,6 +274,36 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
 .suggest button:hover { border-color: var(--accent); color: var(--accent); }
 .sev-summary { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- repository tab ---------- */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.stat { padding: 12px 14px; }
+.stat-value { font-size: 20px; font-weight: 650; color: var(--text); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.lang-bar { display: flex; gap: 2px; height: 12px; border-radius: 4px; overflow: hidden; background: var(--surface); }
+.lang-bar span { min-width: 2px; }
+.lang-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; color: var(--text-2); }
+.lang-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.lang-legend i, .type-chip i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; background: var(--type-color); }
+.chart-tip { position: absolute; top: 0; transform: translateX(-50%); pointer-events: none; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 9px; font-size: 12px; box-shadow: var(--shadow-lg); white-space: nowrap; z-index: 5; color: var(--text); }
+.seg-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.seg-tabs button { border: 0; background: transparent; padding: 8px 12px; cursor: pointer; color: var(--text-2); border-bottom: 2px solid transparent; font-weight: 550; }
+.seg-tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.filter-label { width: 36px; }
+.filter-row .chip { cursor: pointer; gap: 5px; }
+.filter-row .chip:disabled { opacity: .4; cursor: default; }
+.chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.sm-input { width: 96px; height: 28px; font-size: 12.5px; }
+.commit-list { display: grid; gap: 2px; }
+.commit-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; text-align: left; color: var(--text); width: 100%; }
+.commit-row:hover { background: var(--surface-2); }
+.commit-row .type-chip { min-width: 74px; flex: none; }
+.commit-subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commit-size { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-variant-numeric: tabular-nums; width: 150px; justify-content: flex-end; }
+.commit-size .add { color: var(--ok); } .commit-size .del { color: var(--danger); }
+.size-bar { width: 44px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; display: inline-block; }
+.size-bar span { display: block; height: 100%; background: var(--text-3); border-radius: 3px; }
+.commit-meta { flex: none; width: 230px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- code review ---------- */
 .side-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: 12px 10px 4px; }
 .rev-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; background: var(--border); }
@@ -420,7 +454,13 @@ code.plain { background: none !important; border: 0 !important; padding: 0 !impo
 .files { min-width: 0; }
 .files .file-view { flex: 1 1 0; }
 .files .panel { flex: none; }
-.files-changed summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin-bottom: 6px; }
+.commit-modal { height: 88vh; max-width: 1100px; }
+.commit-modal .commit-pane-top { flex: 0 0 auto; max-height: 15%; overflow: auto; margin: 10px 12px 0; }
+.commit-pane-diff { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 10px 12px; }
+.commit-pane-diff .code-block { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.commit-pane-diff .code-scroll, .commit-pane-diff .code-scroll.full { flex: 1; min-height: 0; max-height: none; overflow: auto; }
+.commit-pane-files { flex: 0 0 15%; min-height: 84px; overflow: auto; border-top: 1px solid var(--border); padding: 8px 12px; }
+.files-head { position: sticky; top: -8px; background: var(--surface); padding: 2px 0 6px; z-index: 1; }
 
 .blame-btn { all: unset; display: flex; gap: 6px; width: 100%; cursor: pointer; border-radius: 3px; }
 .blame-btn:hover { color: var(--accent); }

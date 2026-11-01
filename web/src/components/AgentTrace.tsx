@@ -3,7 +3,7 @@ import type { AgentStep } from '@cq/shared';
 
 const ICON: Record<string, string> = {
   read_file: '📄', list_dir: '📁', search_code: '🔎', grep: '⌕', file_info: 'ℹ', list_symbols: '☰', find_definition: '⌖',
-  find_references: '⇠', symbol_calls: '⇢', importer_chain: '⛓', get_architecture: '◇', get_insights: '✎', fallback: '⚠',
+  find_references: '⇠', symbol_calls: '⇢', importer_chain: '⛓', get_architecture: '◇', get_insights: '✎', list_commits: '☷', search_history: '⌕', file_history: '⏱', commit_details: '⎇', fallback: '⚠',
 };
 
 /** Upsert a step into a list (steps arrive as running, then done/error). */

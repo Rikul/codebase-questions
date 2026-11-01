@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { commitTypeOf } from './types.js';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
 import { git } from './git.js';
@@ -84,14 +85,27 @@ export async function indexHistory(db: DB, repoId: string, dir: string, info: Hi
     }
     counts.set(sha.trim(), m);
   }
-  const insC = db.prepare('INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, email_hash, date, subject, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  // Keep types the LLM assigned on a previous run (by sha), so re-analysis does not classify them again.
+  const llmTypes = new Map((db.prepare(`SELECT sha, type FROM commits WHERE repo_id=? AND type_source='llm'`).all(repoId) as { sha: string; type: string }[]).map((r) => [r.sha, r.type]));
+  const insC = db.prepare(
+    'INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, email_hash, date, subject, body, added, deleted, files, type, type_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
   const insF = db.prepare('INSERT INTO file_commits (repo_id, path, sha, status, old_path, added, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)');
   db.transaction(() => {
     db.prepare('DELETE FROM commits WHERE repo_id=?').run(repoId);
     db.prepare('DELETE FROM file_commits WHERE repo_id=?').run(repoId);
     commits.forEach((c, seq) => {
-      insC.run(repoId, c.sha, seq, c.author, c.email ? crypto.createHash('sha256').update(c.email.toLowerCase()).digest('hex').slice(0, 16) : null, c.date, c.subject, c.body);
       const cm = counts.get(c.sha);
+      let added = 0;
+      let deleted = 0;
+      for (const [a, d] of cm?.values() ?? []) {
+        added += a ?? 0;
+        deleted += d ?? 0;
+      }
+      const prior = llmTypes.get(c.sha);
+      const ruleType = commitTypeOf(c.subject);
+      const [type, source] = ruleType === 'other' && prior ? [prior, 'llm'] : [ruleType, 'rule'];
+      insC.run(repoId, c.sha, seq, c.author, c.email ? crypto.createHash('sha256').update(c.email.toLowerCase()).digest('hex').slice(0, 16) : null, c.date, c.subject, c.body, added, deleted, cm?.size ?? 0, type, source);
       for (const line of c.tail.split('\n')) {
         const t = line.split('\t');
         if (t.length < 2 || !/^[AMDRCT]/.test(t[0])) continue;

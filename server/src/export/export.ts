@@ -55,7 +55,9 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
   out.symbols = (db.prepare('SELECT path, name, kind, line, end_line, exported, parent, signature FROM symbols WHERE repo_id=?').all(repoId) as any[]).map((s) => ({
     path: s.path, name: s.name, kind: s.kind, line: s.line, endLine: s.end_line ?? s.line, exported: Boolean(s.exported), parent: s.parent, signature: s.signature,
   }));
-  const commits = db.prepare('SELECT sha, seq, author, date, subject, body FROM commits WHERE repo_id=? ORDER BY seq LIMIT 2000').all(repoId) as any[];
+  const commits = (db.prepare('SELECT sha, seq, author, date, subject, body, type, type_source, added, deleted, files FROM commits WHERE repo_id=? ORDER BY seq LIMIT 2000').all(repoId) as any[]).map(
+    ({ type_source, ...c }) => ({ ...c, typeSource: type_source }),
+  );
   if (commits.length) {
     const shas = new Set(commits.map((c) => c.sha));
     out.history = {
@@ -115,8 +117,8 @@ export function importProject(db: DB, data: unknown): string {
     const insS = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const s of p.symbols ?? []) insS.run(repoId, s.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine, s.parent, s.signature);
     if (p.history) {
-      const insC = db.prepare('INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, date, subject, body) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      for (const c of p.history.commits) insC.run(repoId, c.sha, c.seq, c.author, c.date, c.subject, c.body);
+      const insC = db.prepare('INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, date, subject, body, type, type_source, added, deleted, files) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const c of p.history.commits) insC.run(repoId, c.sha, c.seq, c.author, c.date, c.subject, c.body, c.type ?? null, c.typeSource ?? null, c.added ?? null, c.deleted ?? null, c.files ?? null);
       const insFc = db.prepare('INSERT INTO file_commits (repo_id, path, sha, status, old_path, added, deleted) VALUES (?, ?, ?, ?, ?, ?, ?)');
       for (const f of p.history.fileCommits) insFc.run(repoId, f.path, f.sha, f.status, f.oldPath, f.added, f.deleted);
       db.prepare('UPDATE repos SET history_shallow=?, history_root=?, history_boundaries=?, history_total=?, history_capped=? WHERE id=?').run(

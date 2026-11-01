@@ -1,3 +1,4 @@
+import type { CommitListItem, RepoStats } from '@cq/shared';
 import type { ScannedFile } from '../ingest/scan.js';
 import type { Dependency, FileFacts } from '../ingest/parse.js';
 import type { ImportGraph, ModuleEdge, ModuleGroup } from '../ingest/graph.js';
@@ -21,6 +22,8 @@ export interface RepoContext {
   llm: LLMProvider;
   /** Repo-level git history facts (null without history). */
   history?: ReturnType<typeof repoHistorySummary>;
+  /** Size, languages and commit statistics, plus recent commits with their types (Repository insights). */
+  repo?: { stats: RepoStats; recent: CommitListItem[] };
   warn: (msg: string) => void;
   progress: (message: string, fraction: number) => void;
 }

@@ -41,8 +41,9 @@ class Channel<T> implements AsyncIterable<T> {
 
 const KEYWORDS: Record<Category, RegExp> = {
   architecture: /\b(architect\w*|design|component|module|layer|structure|interact\w*|flow|depend\w*|coupl\w*|diagram|system|microservice|data ?flow|talks? to|communicat\w*|pattern)\b/gi,
-  onboarding: /\b(history|introduced|added|created|changed|who wrote|blame|commit\w*|when was|start|setup|set up|install|run|build|onboard\w*|new (engineer|developer)|where (do|should) i|read first|getting started|convention|test(s|ing)?|debug|contribut\w*|local(ly)?|overview|what does|explain)\b/gi,
+  onboarding: /\b(start|setup|set up|install|run|build|onboard\w*|new (engineer|developer)|where (do|should) i|read first|getting started|convention|test(s|ing)?|debug|contribut\w*|local(ly)?|overview|what does|explain)\b/gi,
   security: /\b(secur\w*|vuln\w*|attack|exploit|auth\w*|permission|xss|csrf|sql ?injection|injection|sanitiz\w*|secrets?|tokens?|passwords?|hash\w*|crypt\w*|cve|threat|ssrf|rce|cors|privilege|leak)\b/gi,
+  repository: /\b(history|histories|commit\w*|introduced|who (wrote|added|created|changed)|blame|when (was|were|did)|contributors?|authors?|maintainers?|releases?|changelog|activity|active|churn|evolv\w*|timeline|recent(ly)? changes?|refactors?|bug ?fix\w*|features? added|hotspots?|most changed)\b/gi,
   api: /\b(api|sdk|library|libraries|endpoint|interface|integrat\w*|call|client|import|usage|example|parameter|signature|runtime|behaviou?r|retry|async|return|exception|hook)\b/gi,
 };
 
@@ -59,7 +60,7 @@ async function classify(llm: LLMProvider, q: string): Promise<Category> {
     const out = await llm.complete({
       fast: true,
       maxTokens: 512, // room for models that reason before replying
-      system: `Classify the developer question into exactly one category id: architecture (system structure/interactions), onboarding (getting oriented, running, conventions), security (attack surface, vulnerabilities), api (using interfaces/libraries, runtime behavior). Reply with only the id.`,
+      system: `Classify the developer question into exactly one category id: architecture (system structure/interactions), onboarding (getting oriented, running, conventions), security (attack surface, vulnerabilities), api (using interfaces/libraries, runtime behavior), repository (history, commits, contributors, activity, how the code evolved). Reply with only the id.`,
       messages: [{ role: 'user', content: q }],
     });
     const id = out.trim().toLowerCase().replace(/[^a-z]/g, '') as Category;
@@ -74,6 +75,8 @@ const PERSONAS: Record<Category, string> = {
   onboarding: 'Answer like a helpful senior teammate onboarding a new engineer: practical, concrete, with exact commands, file paths and a suggested next step.',
   security: 'Answer as an application security reviewer. Identify attack surfaces, trust boundaries and vulnerable patterns. Distinguish confirmed issues (with cited code) from things to verify. Suggest concrete mitigations.',
   api: 'Explain how to use the interfaces and libraries: signatures, required setup, a minimal code example, runtime behavior (sync/async, errors, retries, side effects) and gotchas.',
+  repository:
+    'Answer questions about the repository and its history: activity, contributors, how and why the code changed, releases, hotspots. Use list_commits (filter by type feat/fix/refactor/chore/docs/test, size, author, path, dates, text), search_history, file_history and commit_details instead of guessing. Cite commits by short sha with date and author, and say when history is shallow or capped.',
 };
 
 export function extractCitations(text: string, known: Set<string>): Citation[] {

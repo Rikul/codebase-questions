@@ -42,7 +42,7 @@ describe('analysis pipeline (offline provider)', () => {
   });
 
   it('writes insights and suggested questions for all four categories', () => {
-    for (const cat of ['architecture', 'onboarding', 'security', 'api']) {
+    for (const cat of ['architecture', 'onboarding', 'security', 'api', 'repository']) {
       const n = db.prepare('SELECT count(*) n FROM insights WHERE repo_id=? AND category=?').get(repoId, cat) as any;
       const q = db.prepare('SELECT count(*) n FROM suggested_questions WHERE repo_id=? AND category=?').get(repoId, cat) as any;
       expect(n.n, cat).toBeGreaterThan(0);

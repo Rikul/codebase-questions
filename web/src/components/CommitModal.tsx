@@ -48,7 +48,7 @@ export function CommitModal({ sha, path, onClose }: { sha: string; path?: string
   }, [onClose]);
   return (
     <div className="modal-back" onClick={onClose}>
-      <div className="modal card" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`Commit ${sha}`}>
+      <div className="modal card commit-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`Commit ${sha}`}>
         <div className="panel-head">
           <div className="grow" style={{ minWidth: 0 }}>
             <div className="kicker">commit {sha.slice(0, 10)}</div>
@@ -68,30 +68,34 @@ export function CommitModal({ sha, path, onClose }: { sha: string; path?: string
           )}
           <button className="btn sm ghost" onClick={onClose} aria-label="Close">✕</button>
         </div>
-        <div className="body" style={{ display: 'grid', gap: 12 }}>
-          {error && <div className="error-box">{error}</div>}
-          {!c && !error && <div className="empty"><span className="spinner" /></div>}
-          {c && (
-            <>
-              {c.body && <pre className="commit-body">{c.body}</pre>}
+        {error && <div className="body"><div className="error-box">{error}</div></div>}
+        {!c && !error && <div className="empty"><span className="spinner" /></div>}
+        {c && (
+          <>
+            {/* Three panes that scroll independently: message (top), diff (middle), changed files (bottom). */}
+            {c.body && <pre className="commit-body commit-pane-top">{c.body}</pre>}
+            <div className="commit-pane-diff">
               <CodeViewer code={c.patch || '(no textual changes)'} lang="diff" diff full title={scope ? `Diff of ${scope}` : `Diff (${c.files.length} files)`} />
-              <details className="files-changed" open={!scope}>
-                <summary>{c.files.length} file{c.files.length === 1 ? '' : 's'} changed{scope ? ' (click a file to switch the diff)' : ''}</summary>
-                <div className="link-list">
-                  {c.files.slice(0, 60).map((f) => (
-                    <div key={f.path} className={`link-row ${scope === f.path ? 'active-row' : ''}`}>
-                      <span className={`chip st-${f.status}`}>{STATUS[f.status] ?? f.status}</span>
-                      <button className="grow plain-btn mono small" onClick={() => setScope(scope === f.path ? undefined : f.path)} title="Show only this file's diff">
-                        {f.oldPath ? `${f.oldPath} → ` : ''}{f.path}
-                      </button>
-                      {f.status !== 'D' && <button className="btn sm ghost" onClick={() => { onClose(); openCode(f.path); }}>Open</button>}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            </>
-          )}
-        </div>
+            </div>
+            <div className="commit-pane-files">
+              <div className="files-head small">
+                <b>{c.files.length} file{c.files.length === 1 ? '' : 's'} changed</b>
+                <span className="muted"> · click a file to show only its diff{scope ? ', click it again for the whole commit' : ''}</span>
+              </div>
+              <div className="link-list">
+                {c.files.slice(0, 500).map((f) => (
+                  <div key={f.path} className={`link-row ${scope === f.path ? 'active-row' : ''}`}>
+                    <span className={`chip st-${f.status}`}>{STATUS[f.status] ?? f.status}</span>
+                    <button className="grow plain-btn mono small" onClick={() => setScope(scope === f.path ? undefined : f.path)} title="Show only this file's diff">
+                      {f.oldPath ? `${f.oldPath} → ` : ''}{f.path}
+                    </button>
+                    {f.status !== 'D' && <button className="btn sm ghost" onClick={() => { onClose(); openCode(f.path); }}>Open</button>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

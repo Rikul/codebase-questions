@@ -1,7 +1,7 @@
 import express from 'express';
 import type { Request, Response } from 'express';
 import multer from 'multer';
-import type { AskEvent, AskRequest, Category, JobEvent } from '@cq/shared';
+import type { AskEvent, AskRequest, Category, CommitType, JobEvent, SizeBucket } from '@cq/shared';
 import { CategorySchema, descendants, findConnection } from '@cq/shared';
 import { z } from 'zod';
 import type { Auth } from '../auth.js';
@@ -16,6 +16,7 @@ import { answerQuestion } from '../qa/answer.js';
 import { invalidateVectors } from '../qa/retrieve.js';
 import { fileContent, fileTree, getArchitecture, snippet } from './queries.js';
 import { clickableIdentifiers, explain } from '../agent/explain.js';
+import { listCommits, repoStats } from '../history/commits.js';
 import { getReview, listReviews, reviewRunning, runningFileReviews, streamReview } from '../agent/review.js';
 import { answerOnDiagram } from '../agent/diagram.js';
 import { RepoIndex } from '../agent/tools.js';
@@ -355,6 +356,23 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   r.get('/repos/:id/history/symbol', guard((req) => symbolHistory(db, req.params.id as string, { path: String(req.query.path ?? ''), name: qs(req.query.name), line: qn(req.query.line), start: qn(req.query.start), end: qn(req.query.end) })));
   r.get('/repos/:id/history/summary', guard((req) => repoHistorySummary(db, req.params.id as string) ?? { available: false, reason: 'No git history' }));
   r.get('/repos/:id/blame', guard((req) => blame(db, req.params.id as string, String(req.query.path ?? ''), qn(req.query.start), qn(req.query.end))));
+  // Repository tab: size/language/history statistics and the filterable commit list.
+  r.get('/repos/:id/repository/stats', guard((req) => repoStats(db, req.params.id as string)));
+  const list = (v: unknown) => (typeof v === 'string' && v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
+  r.get('/repos/:id/commits', guard((req) => listCommits(db, req.params.id as string, {
+    types: list(req.query.type) as CommitType[] | undefined,
+    sizes: list(req.query.size) as SizeBucket[] | undefined,
+    minLines: qn(req.query.min),
+    maxLines: qn(req.query.max),
+    q: qs(req.query.q)?.slice(0, 200),
+    author: qs(req.query.author),
+    path: qs(req.query.path),
+    since: qs(req.query.since),
+    until: qs(req.query.until),
+    sort: req.query.sort === 'largest' || req.query.sort === 'oldest' ? req.query.sort : 'newest',
+    limit: qn(req.query.limit),
+    offset: qn(req.query.offset),
+  })));
   r.get('/repos/:id/commits/:sha', guard((req) => commitDetails(db, req.params.id as string, req.params.sha as string, qs(req.query.path))));
 
   r.get('/repos/:id/export', (req, res) => {

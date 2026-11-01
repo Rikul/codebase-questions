@@ -37,6 +37,13 @@ The app keeps a bounded git history (`HISTORY_DEPTH`, 1000 commits by default) a
 
 If history is truncated (shallow clone), creation dates are shown as "on or before". Exports include file timelines; symbol history, blame and diffs need re-analysis after import, because `.git` isn't exported. The kept `.git` has its credentials and reflogs removed, and only read-only git commands are run on it.
 
+### Repository tab
+
+- **At a glance.** Files, lines, languages, commits, contributors and a commits-per-month chart (click a month to list its commits).
+- **Overview.** A pre-written "Repository & history" write-up: activity over time, contributors, how the codebase evolved, hotspots and recent changes, with suggested questions.
+- **Commit explorer.** Filter commits by type (feat, fix, refactor, chore, docs, test, other), by size (XS–XL buckets or a min/max of lines changed), by author or by text, and open any commit's diff. Types come from conventional-commit prefixes and keyword rules; with a model configured, commits the rules can't place are classified in cheap batches during analysis.
+- **Ask about the repository.** A *Repository* category in Ask answers history questions with a `list_commits` tool plus the file and commit history tools.
+
 ### Architecture diagram from the code
 
 - **Built by static analysis.** The diagram is deterministic: no LLM invents or merges components. With a model configured, each box also gets a short readable label and summary (the static name, e.g. `github.com/acme/app/v2`, stays underneath). Packages (from `package.json`, `go.mod`, `pyproject.toml`, `Cargo.toml` and similar manifests) become containers, with their modules and subdirectories inside.

@@ -180,7 +180,7 @@ describe('history questions in Ask (offline)', async () => {
     const { openDb } = await import('../src/db/index.js');
     const { MockProvider } = await import('../src/llm/mock.js');
     const { answerQuestion, classifyHeuristic } = await import('../src/qa/answer.js');
-    expect(classifyHeuristic('When was the login function added?').category).toBe('onboarding');
+    expect(classifyHeuristic('When was the login function added?').category).toBe('repository');
     // Reuse the clone made by the suite above (same DATA_DIR) by re-indexing into a fresh DB.
     const { analyzeDirectory } = await import('../src/ingest/pipeline.js');
     const { finalizeHistory } = await import('../src/history/git.js');

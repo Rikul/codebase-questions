@@ -11,6 +11,7 @@ import { Chat } from '../components/Chat';
 import { CommitModal } from '../components/CommitModal';
 import { FilesView, type FileTarget } from '../components/FilesView';
 import { InsightsView } from '../components/InsightsView';
+import { RepositoryView } from '../components/RepositoryView';
 import { ReviewView } from '../components/ReviewView';
 import { useJobProgress } from './Home';
 
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'onboarding', label: `${CATEGORY_META.onboarding.icon} Onboarding` },
   { id: 'security', label: `${CATEGORY_META.security.icon} Security` },
   { id: 'api', label: `${CATEGORY_META.api.icon} API & Libraries` },
+  { id: 'repository', label: `${CATEGORY_META.repository.icon} Repository` },
   { id: 'ask', label: '✦ Ask' },
   { id: 'review', label: '✓ Review' },
   { id: 'files', label: '▤ Files' },
@@ -187,6 +189,7 @@ export function Repo() {
                   <InsightsView category={tab as Category} />
                 </div>
               )}
+              {tab === 'repository' && <div className="insights-layout"><RepositoryView /></div>}
               {tab === 'ask' && <Chat intent={intent} onIntentConsumed={() => setIntent(null)} />}
               {tab === 'review' && <ReviewView path={reviewPath} />}
               {tab === 'files' && <FilesView target={fileTarget} />}

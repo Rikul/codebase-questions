@@ -5,6 +5,7 @@ export const CATEGORY_META: Record<Category, { label: string; short: string; ico
   onboarding: { label: 'Code onboarding', short: 'Onboarding', icon: '➜' },
   security: { label: 'Security', short: 'Security', icon: '⛨' },
   api: { label: 'API & library integration', short: 'API & Libraries', icon: '⚙' },
+  repository: { label: 'Repository & history', short: 'Repository', icon: '⎇' },
 };
 
 export const TYPE_COLORS: Record<ComponentType, string> = {

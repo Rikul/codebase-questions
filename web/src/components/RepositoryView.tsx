@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { CommitList, CommitListItem, CommitType, Insight, RepoStats, SizeBucket } from '@cq/shared';
-import { COMMIT_TYPES, SIZE_BUCKETS } from '@cq/shared';
+import { COMMIT_TYPES, isUploadUrl, SIZE_BUCKETS } from '@cq/shared';
 import { api } from '../lib/api';
 import { useRepo } from '../lib/repoContext';
 import { InsightCard, SuggestedQuestions } from './InsightsView';
@@ -78,7 +78,11 @@ export function RepositoryView() {
           (h ? (
             <CommitExplorer stats={h} />
           ) : (
-            <div className="card insight">No git history is available for this repository, so there is no commit list. Set <code>HISTORY_DEPTH</code> to 0 (full history) or a commit count, then re-analyze.</div>
+            <div className="card insight">
+              {isUploadUrl(repo.url)
+                ? <>This project was uploaded as a ZIP or folder, which carries no git history (any <code>.git</code> folder is left out), so there is no commit list. Add it by Git URL to explore its history.</>
+                : <>No git history is available for this repository, so there is no commit list. Set <code>HISTORY_DEPTH</code> to 0 (full history) or a commit count, then re-analyze.</>}
+            </div>
           ))}
       </div>
     </div>

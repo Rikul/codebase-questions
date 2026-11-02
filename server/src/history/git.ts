@@ -21,7 +21,8 @@ export function hasGit(dir: string): boolean {
 /** Run a read-only git command in a checkout (no shell; fixed argument list). */
 export async function git(dir: string, args: string[], opts: { timeoutMs?: number; maxBuffer?: number } = {}): Promise<string> {
   const { stdout } = await run('git', ['-C', dir, '-c', 'core.quotepath=off', '-c', 'diff.noprefix=false', ...args], {
-    env: gitEnv(),
+    // Never look for a repository above the checkout (an upload has no .git, and DATA_DIR may sit inside another repo).
+    env: { ...gitEnv(), GIT_CEILING_DIRECTORIES: path.dirname(path.resolve(dir)) },
     timeout: opts.timeoutMs ?? 60_000,
     maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
   });

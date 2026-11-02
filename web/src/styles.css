@@ -158,7 +158,10 @@ textarea.input { height: auto; padding: 10px 12px; resize: none; line-height: 1.
 /* ---------- home ---------- */
 .hero h1 { font-size: 26px; letter-spacing: -0.02em; }
 .hero p { color: var(--text-2); margin: 6px 0 20px; max-width: 640px; }
+.add-card { padding: 0; }
 .add-form { display: flex; gap: 8px; padding: 12px; }
+.add-alt { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; min-height: 30px; }
+.add-alt .progress { min-width: 120px; }
 .repo-list { display: grid; gap: 10px; margin-top: 24px; }
 .repo-item { display: flex; align-items: center; gap: 14px; padding: 14px 16px; }
 .repo-item:hover { border-color: var(--border-strong); }

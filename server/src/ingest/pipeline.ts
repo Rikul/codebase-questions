@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Architecture, JobEvent, RepoSummary } from '@cq/shared';
-import { analysisProgress, defaultView } from '@cq/shared';
+import { analysisProgress, defaultView, isUploadUrl, UPLOAD_URL_PREFIX } from '@cq/shared';
 import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
@@ -27,6 +27,7 @@ import { classifyCommits } from '../history/classify.js';
 import { listCommits, repoStats } from '../history/commits.js';
 import { repoDir } from '../paths.js';
 import { scanRepo } from './scan.js';
+import type { UploadResult } from './upload.js';
 
 export const jobEvents = new EventEmitter();
 jobEvents.setMaxListeners(0);
@@ -49,13 +50,40 @@ export function rowToRepo(r: any): RepoSummary {
   };
 }
 
+const newRepoId = (name: string) => `${name.replace(/[^\w.-]+/g, '-').toLowerCase()}-${crypto.randomBytes(3).toString('hex')}`;
+
 export function createRepo(db: DB, input: string): { repoId: string; jobId: string } {
   const parsed = parseRepoUrl(input);
-  const repoId = `${parsed.name.replace(/[^\w.-]+/g, '-').toLowerCase()}-${crypto.randomBytes(3).toString('hex')}`;
+  const repoId = newRepoId(parsed.name);
   const displayUrl = parsed.branch ? `${parsed.url}#${parsed.branch}` : parsed.url;
   db.prepare('INSERT INTO repos (id, name, url, status) VALUES (?, ?, ?, ?)').run(repoId, parsed.name, displayUrl, 'queued');
   const jobId = enqueue(db, repoId);
   return { repoId, jobId };
+}
+
+/**
+ * Create a repository from an uploaded ZIP or folder: `fill` writes the source tree into the new
+ * checkout directory, then analysis is queued. Uploads have no remote and no git history.
+ */
+export async function createUploadRepo(
+  db: DB,
+  name: string,
+  source: string,
+  fill: (dir: string) => Promise<UploadResult>,
+): Promise<{ repoId: string; jobId: string; files: number; warnings: string[] }> {
+  const clean = name.replace(/[^\w.-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 80) || 'upload';
+  const repoId = newRepoId(clean);
+  const dir = repoDir(repoId);
+  let result: UploadResult;
+  try {
+    result = await fill(dir);
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
+  db.prepare('INSERT INTO repos (id, name, url, status) VALUES (?, ?, ?, ?)').run(repoId, clean, `${UPLOAD_URL_PREFIX}${source.slice(0, 200)}`, 'queued');
+  log('info', 'upload.extracted', { repoId, files: result.files, mb: Math.round(result.bytes / 1024 / 1024), warningCount: result.warnings.length });
+  return { repoId, jobId: enqueue(db, repoId), files: result.files, warnings: result.warnings };
 }
 
 // ---------- simple sequential job queue ----------
@@ -132,13 +160,22 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   const warnings: string[] = [];
   try {
     const dir = repoDir(repoId);
-    // Re-analysis fetches into the existing checkout when there is one; otherwise it clones.
-    const hasCheckout = fs.existsSync(path.join(dir, '.git'));
-    emit('clone', `${hasCheckout ? 'Updating' : 'Cloning'} ${repo.url}`, analysisProgress('clone'));
-    const { commit, history, warnings: cloneWarnings, updated } = await syncRepo(parseRepoUrl(repo.url), dir);
-    log('info', 'analysis.checkout.ready', { updated });
-    warnings.push(...cloneWarnings);
-    if (cloneWarnings.length) log('warn', 'analysis.clone.warnings', { count: cloneWarnings.length });
+    let commit: string | null = null;
+    let history: HistoryInfo | null = null;
+    if (isUploadUrl(repo.url)) {
+      // Uploaded source is analyzed where it was extracted; there is nothing to fetch.
+      if (!fs.existsSync(dir)) throw new Error('The uploaded files are missing on the server; upload the project again.');
+      emit('clone', `Using uploaded files (${repo.url.slice(UPLOAD_URL_PREFIX.length)})`, analysisProgress('clone'));
+    } else {
+      // Re-analysis fetches into the existing checkout when there is one; otherwise it clones.
+      const hasCheckout = fs.existsSync(path.join(dir, '.git'));
+      emit('clone', `${hasCheckout ? 'Updating' : 'Cloning'} ${repo.url}`, analysisProgress('clone'));
+      const synced = await syncRepo(parseRepoUrl(repo.url), dir);
+      ({ commit, history } = synced);
+      log('info', 'analysis.checkout.ready', { updated: synced.updated });
+      warnings.push(...synced.warnings);
+      if (synced.warnings.length) log('warn', 'analysis.clone.warnings', { count: synced.warnings.length });
+    }
     db.prepare('UPDATE repos SET commit_sha=?, has_source=1 WHERE id=?').run(commit, repoId);
     await analyzeDirectory(db, llm, embeddings, repoId, dir, (stage, msg, p) => emit(stage, msg, p), (w) => {
       warnings.push(w);

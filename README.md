@@ -1,6 +1,6 @@
 # Codebase Questions
 
-Point the app at any Git repository. It clones the repo, maps it with static analysis plus an LLM, and builds a searchable knowledge base. You can then explore that knowledge base and ask it questions in four areas:
+Point the app at any Git repository, or upload a project as a ZIP or folder. It clones the repo (or extracts the upload), maps it with static analysis plus an LLM, and builds a searchable knowledge base. You can then explore that knowledge base and ask it questions in four areas:
 
 ## Quick start (Docker)
 
@@ -36,6 +36,10 @@ The app keeps a bounded git history (`HISTORY_DEPTH`, 1000 commits by default) a
 - Onboarding gets a **Project history & hotspots** section (most-changed files, top contributors, recent changes), and component panels show recently changed files and hotspots.
 
 If history is truncated (shallow clone), creation dates are shown as "on or before". Exports include file timelines; symbol history, blame and diffs need re-analysis after import, because `.git` isn't exported. The kept `.git` has its credentials and reflogs removed, and only read-only git commands are run on it.
+
+### Upload a ZIP or folder
+
+No Git URL? On the home page, **Upload ZIP** takes a `.zip` (a GitHub *Download ZIP* works; its top-level folder is stripped), and **Upload folder** picks a folder from your computer. Folder uploads leave out `node_modules`, build output, binaries and whatever the folder's root `.gitignore` excludes before anything is sent. Uploads have no git history: any `.git` folder is dropped, because its config can make git run commands. Re-analyze rebuilds from the uploaded files. Size is limited by `MAX_UPLOAD_MB` (request size) and `MAX_REPO_MB` / `MAX_REPO_FILES` (extracted source).
 
 ### Repository tab
 
@@ -111,6 +115,7 @@ All settings are environment variables. See [`.env.example`](.env.example).
 | `GITHUB_TOKEN` | — | Read access for private GitHub repos. It is never written to disk or logs. |
 | `MAX_LLM_FILES` | 150 | How many of the most central files get an LLM summary. The rest get static summaries. |
 | `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits (working tree) |
+| `MAX_UPLOAD_MB` | 200 | Largest ZIP or folder upload. |
 | `HISTORY_DEPTH` / `HISTORY_INDEX_COMMITS` / `MAX_HISTORY_MB` | 1000 / 5000 / 500 | Git history kept, commits indexed for timelines, and the size limit for the kept `.git`. Over the limit, history is dropped with a warning. Truncated history is labeled in the UI. |
 | `COOKIE_SECURE`, `TRUST_PROXY` | false | Set both when serving behind an HTTPS reverse proxy. |
 
@@ -121,7 +126,7 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## How it works
 
 ```
-clone, or fetch into the existing checkout on re-analysis (https only, bounded history) → scan (.gitignore, skip binaries/vendored)
+clone, or fetch into the existing checkout on re-analysis (https only, bounded history), or extract an uploaded ZIP/folder → scan (.gitignore, skip binaries/vendored)
   → parse (imports, symbols, routes, env vars, security + infra signals, manifests)
   → import graph → module grouping → chunk + FTS5 index (+ embeddings)
   → git history index (commits, per-file changes, renames)
@@ -140,7 +145,7 @@ clone, or fetch into the existing checkout on re-analysis (https only, bounded h
 
 ### Safety
 
-The app never executes code from analyzed repositories: it does not install dependencies or run scripts or hooks. Clones run `git` directly with a fixed argument list and no shell, accept only `https://` URLs, and do not follow symlinks. The `.git` directory is deleted after cloning. File reads are confined to the checkout.
+The app never executes code from analyzed repositories: it does not install dependencies or run scripts or hooks. Clones run `git` directly with a fixed argument list and no shell, accept only `https://` URLs, and do not follow symlinks. Uploaded ZIPs and folders are extracted without symlinks, absolute or `..` paths, executable bits or `.git` folders, within size and file-count limits checked before anything is written. The `.git` directory is deleted after cloning. File reads are confined to the checkout.
 
 ### Analysis logs
 

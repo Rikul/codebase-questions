@@ -47,6 +47,8 @@ export const config = {
     maxFileBytes: num('MAX_FILE_BYTES', 400_000),
     maxRepoFiles: num('MAX_REPO_FILES', 20_000),
     maxRepoMb: num('MAX_REPO_MB', 500),
+    /** Max size of an uploaded ZIP or folder (the request body). */
+    maxUploadMb: num('MAX_UPLOAD_MB', 200),
     /** Max size of the retained .git history; larger histories are dropped (analysis continues without history). */
     maxHistoryMb: num('MAX_HISTORY_MB', 500),
     cloneTimeoutMs: num('CLONE_TIMEOUT_MS', 5 * 60_000),

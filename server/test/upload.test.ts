@@ -1,0 +1,178 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import request from 'supertest';
+import { describe, expect, it } from 'vitest';
+
+// Config is read when the app modules load, so set it before importing them.
+process.env.DATA_DIR = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-upload-')), 'data');
+process.env.AUTH_DISABLED = 'true';
+const { Auth } = await import('../src/auth.js');
+const { openDb } = await import('../src/db/index.js');
+const { createApp } = await import('../src/index.js');
+const { runJob } = await import('../src/ingest/pipeline.js');
+const { cleanEntryPath, extractZip } = await import('../src/ingest/upload.js');
+const { MockProvider } = await import('../src/llm/mock.js');
+const { repoDir } = await import('../src/paths.js');
+
+/** Build a ZIP in memory. Entries may be deflated, stored, symlinks, or lie about their size. */
+function zip(entries: { name: string; data?: string | Buffer; store?: boolean; symlink?: boolean; declaredSize?: number }[]): Buffer {
+  const locals: Buffer[] = [];
+  const cens: Buffer[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const name = Buffer.from(e.name, 'utf8');
+    const raw = Buffer.from(e.data ?? '');
+    const method = e.store || e.symlink ? 0 : 8;
+    const body = method === 8 ? zlib.deflateRawSync(raw) : raw;
+    const size = e.declaredSize ?? raw.length;
+    const loc = Buffer.alloc(30);
+    loc.writeUInt32LE(0x04034b50, 0);
+    loc.writeUInt16LE(20, 4);
+    loc.writeUInt16LE(0x800, 6);
+    loc.writeUInt16LE(method, 8);
+    loc.writeUInt32LE(body.length, 18);
+    loc.writeUInt32LE(size, 22);
+    loc.writeUInt16LE(name.length, 26);
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);
+    cen.writeUInt16LE((3 << 8) | 20, 4);
+    cen.writeUInt16LE(20, 6);
+    cen.writeUInt16LE(0x800, 8);
+    cen.writeUInt16LE(method, 10);
+    cen.writeUInt32LE(body.length, 20);
+    cen.writeUInt32LE(size, 24);
+    cen.writeUInt16LE(name.length, 28);
+    cen.writeUInt32LE(((e.symlink ? 0o120777 : 0o100755) << 16) >>> 0, 38);
+    cen.writeUInt32LE(offset, 42);
+    locals.push(loc, name, body);
+    cens.push(cen, name);
+    offset += 30 + name.length + body.length;
+  }
+  const cd = Buffer.concat(cens);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, cd, end]);
+}
+
+const limits = { maxBytes: 10 * 1024 * 1024, maxFiles: 1000, maxFileBytes: 100_000 };
+const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-up-')), 'out');
+const list = (dir: string): string[] =>
+  fs.readdirSync(dir, { withFileTypes: true, recursive: true }).filter((e) => !e.isDirectory()).map((e) => path.relative(dir, path.join(e.parentPath, e.name)).split(path.sep).join('/')).sort();
+
+describe('entry paths', () => {
+  it.each([
+    ['src/a.ts', 'src/a.ts'],
+    ['./src//a.ts', 'src/a.ts'],
+    ['src\\win\\a.ts', 'src/win/a.ts'],
+    ['../evil.sh', null],
+    ['a/../../evil', null],
+    ['/etc/passwd', null],
+    ['C:/x.txt', null],
+    ['repo/.git/config', null],
+    ['__MACOSX/._a.ts', null],
+    ['a/.DS_Store', null],
+    ['a\0b', null],
+  ])('%s → %s', (raw, want) => expect(cleanEntryPath(raw)).toBe(want));
+});
+
+describe('ZIP extraction', () => {
+  it('writes only safe source files, stripping the shared top folder', async () => {
+    const dest = tmp();
+    const outside = path.join(path.dirname(dest), 'evil.txt');
+    const r = await extractZip(
+      zip([
+        { name: 'proj-main/', store: true },
+        { name: 'proj-main/src/index.ts', data: 'export const a = 1;\n'.repeat(50) },
+        { name: 'proj-main/README.md', data: '# Proj\n', store: true },
+        { name: 'proj-main/../evil.txt', data: 'x' },
+        { name: 'proj-main/.git/config', data: '[core]\n\tfsmonitor = touch /tmp/pwned\n' },
+        { name: 'proj-main/node_modules/dep/index.js', data: 'module.exports = 1' },
+        { name: 'proj-main/link', data: '/etc/passwd', symlink: true },
+        { name: 'proj-main/big.txt', data: 'x'.repeat(200_000) },
+      ]),
+      dest,
+      limits,
+    );
+    expect(list(dest)).toEqual(['README.md', 'src/index.ts']);
+    expect(r).toMatchObject({ files: 2, root: 'proj-main' });
+    expect(fs.existsSync(outside)).toBe(false);
+    expect(fs.readFileSync(path.join(dest, 'src/index.ts'), 'utf8')).toContain('export const a = 1;');
+    expect(fs.statSync(path.join(dest, 'src/index.ts')).mode & 0o111).toBe(0);
+    expect(r.warnings.join(' ')).toMatch(/symlink/);
+    expect(r.warnings.join(' ')).toMatch(/MAX_FILE_BYTES/);
+  });
+
+  it('refuses archives over the size or file limits before writing anything', async () => {
+    const dest = tmp();
+    await expect(extractZip(zip([{ name: 'a.ts', data: 'x', declaredSize: 50_000 }, { name: 'b.ts', data: 'y', declaredSize: 50_000 }]), dest, { ...limits, maxBytes: 60_000 })).rejects.toThrow(/MAX_REPO_MB/);
+    await expect(extractZip(zip([{ name: 'a.ts', data: 'x' }, { name: 'b.ts', data: 'y' }]), dest, { ...limits, maxFiles: 1 })).rejects.toThrow(/MAX_REPO_FILES/);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('does not inflate past the declared size', async () => {
+    const dest = tmp();
+    // Declares 10 bytes but inflates to 50 000: the entry is not written.
+    await expect(extractZip(zip([{ name: 'bomb.ts', data: 'a'.repeat(50_000), declaredSize: 10 }]), dest, limits)).rejects.toThrow(/could be read/);
+  });
+
+  it('rejects files that are not ZIP archives', async () => {
+    await expect(extractZip(Buffer.from('not a zip at all'), tmp(), limits)).rejects.toThrow(/Not a ZIP/);
+  });
+});
+
+describe('upload route', () => {
+  const setup = () => {
+    const db = openDb(':memory:');
+    const app = createApp(db, new MockProvider(), null, new Auth(db, crypto.randomBytes(32)));
+    return { db, app };
+  };
+
+  it('creates a repository from a ZIP and analyzes it without cloning', async () => {
+    const { db, app } = setup();
+    const archive = zip([
+      { name: 'shop-main/package.json', data: JSON.stringify({ name: 'shop', dependencies: { express: '^4' } }) },
+      { name: 'shop-main/src/server.js', data: "const express = require('express');\nconst app = express();\napp.get('/items', (req, res) => res.json([]));\n" },
+    ]);
+    const res = await request(app).post('/api/repos/upload').attach('file', archive, 'shop-main.zip');
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const { repoId, jobId } = res.body;
+    const repo = db.prepare('SELECT name, url, status FROM repos WHERE id=?').get(repoId);
+    expect(repo).toMatchObject({ name: 'shop-main', url: 'upload:shop-main.zip' });
+    expect(list(repoDir(repoId))).toEqual(['package.json', 'src/server.js']);
+
+    await runJob(db, new MockProvider(), null, jobId, repoId);
+    expect(db.prepare('SELECT status, commit_sha FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready', commit_sha: null });
+    expect((db.prepare('SELECT path FROM files WHERE repo_id=? ORDER BY path').all(repoId) as any[]).map((f) => f.path)).toEqual(['package.json', 'src/server.js']);
+    // Re-analysis reuses the uploaded files.
+    await runJob(db, new MockProvider(), null, crypto.randomUUID(), repoId);
+    expect(db.prepare('SELECT status FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready' });
+  });
+
+  it('creates a repository from folder files and their relative paths', async () => {
+    const { db, app } = setup();
+    const res = await request(app)
+      .post('/api/repos/upload')
+      .field('paths', JSON.stringify(['tool/main.py', 'tool/lib/util.py', 'tool/.git/HEAD']))
+      .attach('files', Buffer.from('from lib.util import f\nf()\n'), 'main.py')
+      .attach('files', Buffer.from('def f():\n    return 1\n'), 'util.py')
+      .attach('files', Buffer.from('ref: refs/heads/main\n'), 'HEAD');
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(db.prepare('SELECT name, url FROM repos WHERE id=?').get(res.body.repoId)).toEqual({ name: 'tool', url: 'upload:tool/' });
+    expect(list(repoDir(res.body.repoId))).toEqual(['lib/util.py', 'main.py']);
+  });
+
+  it('rejects bad uploads without creating a repository', async () => {
+    const { db, app } = setup();
+    expect((await request(app).post('/api/repos/upload').attach('file', Buffer.from('hello'), 'x.zip')).body.error).toMatch(/Not a ZIP/);
+    expect((await request(app).post('/api/repos/upload').field('paths', '["a.py"]').attach('files', Buffer.from('1'), 'a.py').attach('files', Buffer.from('2'), 'b.py')).status).toBe(400);
+    expect((await request(app).post('/api/repos/upload').field('name', 'x')).body.error).toMatch(/Choose a .zip/);
+    expect((db.prepare('SELECT count(*) AS n FROM repos').get() as any).n).toBe(0);
+  });
+});

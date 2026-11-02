@@ -11,7 +11,8 @@ import type { DB } from '../db/index.js';
 import { compactDb, json } from '../db/index.js';
 import { errorDetails, log } from '../logging/index.js';
 import { exportProject, importProject } from '../export/export.js';
-import { createRepo, deleteRepo, enqueue, jobEvents, rowToRepo } from '../ingest/pipeline.js';
+import { createRepo, createUploadRepo, deleteRepo, enqueue, jobEvents, rowToRepo } from '../ingest/pipeline.js';
+import { extractZip, writeEntries } from '../ingest/upload.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
 import { answerQuestion } from '../qa/answer.js';
 import { invalidateVectors } from '../qa/retrieve.js';
@@ -102,7 +103,7 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   });
 
   r.get('/config', (_req, res) => {
-    res.json({ provider: llm.name, model: llm.model, embeddings: embeddings?.name ?? null });
+    res.json({ provider: llm.name, model: llm.model, embeddings: embeddings?.name ?? null, maxUploadMb: config.ingest.maxUploadMb });
   });
 
   const repoSelect = `SELECT r.*, (SELECT count(*) FROM files f WHERE f.repo_id = r.id) AS file_count FROM repos r`;
@@ -128,6 +129,57 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       res.status(400).json({ error: (err as Error).message });
     }
   });
+
+  // Upload a project as a ZIP (`file`) or as a folder (`files`, with their relative paths as a JSON
+  // array in `paths`, in the same order). The size is checked before the body is read.
+  const maxUploadBytes = config.ingest.maxUploadMb * 1024 * 1024;
+  const sourceUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: maxUploadBytes, files: Math.max(config.ingest.maxRepoFiles * 2, 1000), fields: 10, fieldSize: 32 * 1024 * 1024 },
+  }).fields([{ name: 'file', maxCount: 1 }, { name: 'files' }]);
+  r.post(
+    '/repos/upload',
+    (req, res, next) => {
+      const len = Number(req.headers['content-length']);
+      if (!len) return void res.status(411).json({ error: 'Upload size is missing (Content-Length).' });
+      if (len > maxUploadBytes) return void res.status(413).json({ error: `The upload is ${(len / 1024 / 1024).toFixed(0)} MB, over the limit of ${config.ingest.maxUploadMb} MB (MAX_UPLOAD_MB).` });
+      sourceUpload(req, res, (err?: unknown) => {
+        if (!err) return next();
+        const code = (err as { code?: string }).code;
+        res.status(code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: code === 'LIMIT_FILE_COUNT' ? 'The folder has too many files.' : (err as Error).message });
+      });
+    },
+    async (req, res) => {
+      const limits = { maxBytes: config.ingest.maxRepoMb * 1024 * 1024, maxFiles: config.ingest.maxRepoFiles, maxFileBytes: config.ingest.maxFileBytes };
+      const parts = (req.files ?? {}) as Record<string, Express.Multer.File[] | undefined>;
+      const named = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      try {
+        const zip = parts.file?.[0];
+        const folder = parts.files ?? [];
+        let created;
+        if (zip) {
+          if (!/\.zip$/i.test(zip.originalname) && (zip.buffer.length < 4 || zip.buffer.readUInt32LE(0) !== 0x04034b50)) throw new Error('Upload a .zip file.');
+          created = await createUploadRepo(db, named || zip.originalname.replace(/\.zip$/i, ''), zip.originalname, (dir) => extractZip(zip.buffer, dir, limits));
+        } else if (folder.length) {
+          let paths: unknown;
+          try {
+            paths = JSON.parse(String(req.body?.paths ?? ''));
+          } catch {
+            paths = null;
+          }
+          if (!Array.isArray(paths) || paths.length !== folder.length || !paths.every((p) => typeof p === 'string')) throw new Error('Each uploaded file needs its relative path (send `paths` as a JSON array).');
+          const top = String(paths[0]).replace(/\\/g, '/').split('/').filter(Boolean)[0] ?? 'upload';
+          const entries = folder.map((f, i) => ({ path: paths[i] as string, size: f.size, read: async () => f.buffer }));
+          created = await createUploadRepo(db, named || top, `${top}/`, (dir) => writeEntries(entries, dir, limits));
+        } else {
+          throw new Error('Choose a .zip file or a folder to upload.');
+        }
+        res.status(201).json(created);
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
+      }
+    },
+  );
 
   const getRepo = (req: Request, res: Response) => {
     const row = db.prepare(`${repoSelect} WHERE r.id=?`).get(req.params.id);

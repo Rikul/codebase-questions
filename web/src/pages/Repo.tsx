@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Category, RepoSummary } from '@cq/shared';
-import { ANALYSIS_STEPS } from '@cq/shared';
+import { ANALYSIS_STEPS, isUploadUrl } from '@cq/shared';
 import { api, post } from '../lib/api';
-import { CATEGORY_META } from '../lib/format';
+import { CATEGORY_META, sourceLabel } from '../lib/format';
 import type { AskIntent, RepoCtx } from '../lib/repoContext';
 import { RepoContext } from '../lib/repoContext';
 import { ArchDiagram } from '../components/ArchDiagram';
@@ -37,7 +37,7 @@ function Progress({ repo, onDone }: { repo: RepoSummary; onDone: () => void }) {
     <div className="page" style={{ maxWidth: 640 }}>
       <div className="card" style={{ padding: 24 }}>
         <h2 style={{ fontSize: 18 }}>Building the knowledge base</h2>
-        <p className="muted">{repo.url}</p>
+        <p className="muted">{sourceLabel(repo.url)}</p>
         <div className="progress" style={{ margin: '16px 0 8px' }}><div style={{ width: `${Math.round((ev?.progress ?? 0) * 100)}%` }} /></div>
         <div className="row small"><span className="spinner" /> {ev?.message ?? 'Waiting in queue…'}</div>
         <ol className="small" style={{ marginTop: 16, paddingLeft: 20, color: 'var(--text-3)' }}>
@@ -138,7 +138,11 @@ export function Repo() {
           <span className={`status ${repo.status}`}>{repo.status}</span>
           {repo.commit && <code className="small">{repo.commit.slice(0, 8)}</code>}
           <span className="grow" />
-          <a className="btn sm ghost" href={repo.url.split('#')[0]} target="_blank" rel="noreferrer">Source ↗</a>
+          {isUploadUrl(repo.url) ? (
+            <span className="muted small" title="Uploaded as a ZIP or folder; there is no remote or git history">{sourceLabel(repo.url)}</span>
+          ) : (
+            <a className="btn sm ghost" href={repo.url.split('#')[0]} target="_blank" rel="noreferrer">Source ↗</a>
+          )}
           <div style={{ position: 'relative' }}>
             <button className="btn sm" onClick={() => setMenu((m) => !m)} disabled={busy}>Export ▾</button>
             {menu && (
@@ -154,12 +158,12 @@ export function Repo() {
           </div>
           <button
             className="btn sm"
-            disabled={busy || repo.status === 'enriching' || !repo.url.startsWith('https://')}
+            disabled={busy || repo.status === 'enriching' || !(repo.url.startsWith('https://') || isUploadUrl(repo.url))}
             onClick={async () => {
               await post(`/repos/${repo.id}/reanalyze`);
               load();
             }}
-            title="Fetch the latest commits and rebuild the knowledge base (clones only if the checkout is missing; unchanged file summaries are reused)"
+            title={isUploadUrl(repo.url) ? 'Rebuild the knowledge base from the uploaded files (unchanged file summaries are reused)' : 'Fetch the latest commits and rebuild the knowledge base (clones only if the checkout is missing; unchanged file summaries are reused)'}
           >
             Re-analyze
           </button>

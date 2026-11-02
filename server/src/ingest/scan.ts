@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import ignore from 'ignore';
+import { DEFAULT_IGNORES } from '@cq/shared';
 
 export interface ScannedFile {
   path: string; // posix, relative to repo root
@@ -31,15 +32,6 @@ const NAME_LANG: Record<string, string> = {
   procfile: 'text', jenkinsfile: 'groovy', '.env.example': 'dotenv', '.env.sample': 'dotenv',
 };
 
-const DEFAULT_IGNORES = [
-  '.git', 'node_modules', 'vendor', 'third_party', 'bower_components', 'dist', 'build', 'out', 'target', 'obj',
-  '.next', '.nuxt', '.svelte-kit', '.turbo', '.cache', 'coverage', '__pycache__', '.venv', 'venv', '.tox', '.mypy_cache',
-  '.pytest_cache', '.gradle', '.idea', '.vscode', 'Pods', 'DerivedData', '*.min.js', '*.min.css', '*.map', '*.lock',
-  'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'Cargo.lock', 'poetry.lock', 'go.sum', 'composer.lock', 'Gemfile.lock',
-  '*.png', '*.jpg', '*.jpeg', '*.gif', '*.webp', '*.ico', '*.icns', '*.pdf', '*.zip', '*.gz', '*.tgz', '*.jar', '*.war',
-  '*.so', '*.dylib', '*.dll', '*.exe', '*.wasm', '*.woff', '*.woff2', '*.ttf', '*.eot', '*.otf', '*.mp3', '*.mp4', '*.mov',
-  '*.svg', '*.pyc', '*.class', '*.o', '*.a', '*.bin', '*.dat', '*.db', '*.sqlite', '*.pkl', '*.parquet', '*.onnx', '*.pt',
-];
 
 export function detectLang(rel: string): string | null {
   const base = path.posix.basename(rel).toLowerCase();
@@ -58,6 +50,13 @@ function looksBinary(buf: Buffer): boolean {
 export interface ScanOptions {
   maxFileBytes: number;
   maxFiles: number;
+}
+
+const defaultIgnore = ignore().add(DEFAULT_IGNORES);
+
+/** True for paths the scanner never indexes (vendored, generated, binary or lock files). */
+export function isIgnoredPath(rel: string): boolean {
+  return defaultIgnore.ignores(rel);
 }
 
 export function scanRepo(root: string, opts: ScanOptions): ScannedFile[] {

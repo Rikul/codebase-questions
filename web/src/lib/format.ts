@@ -1,4 +1,5 @@
 import type { Category, ComponentType, ConnectionKind } from '@cq/shared';
+import { isUploadUrl, UPLOAD_URL_PREFIX } from '@cq/shared';
 
 export const CATEGORY_META: Record<Category, { label: string; short: string; icon: string }> = {
   architecture: { label: 'Architecture & system design', short: 'Architecture', icon: '◇' },
@@ -56,3 +57,6 @@ export function langFromPath(p: string): string | undefined {
 }
 
 /** Literal colors for SVG attributes (the minimap cannot resolve CSS variables). */
+
+/** Human-readable source of a repository: its URL, or "Uploaded <name>" for ZIP/folder uploads. */
+export const sourceLabel = (url: string) => (isUploadUrl(url) ? `Uploaded ${url.slice(UPLOAD_URL_PREFIX.length)}` : url);

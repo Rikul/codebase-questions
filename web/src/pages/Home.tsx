@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import type { JobEvent, RepoSummary } from '@cq/shared';
 import { CATEGORIES } from '@cq/shared';
 import { api, post } from '../lib/api';
-import { CATEGORY_META, timeAgo } from '../lib/format';
+import { CATEGORY_META, sourceLabel, timeAgo } from '../lib/format';
+import { folderFiles, uploadSource } from '../lib/upload';
 
 const CAT_DESC = {
   architecture: 'An interactive component diagram: click components and connections to see code evidence.',
@@ -51,7 +52,7 @@ function RepoRow({ repo, onChange }: { repo: RepoSummary; onChange: () => void }
           <span className={`status ${repo.status}`}>{repo.status}</span>
         </div>
         <div className="muted small" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {repo.url} · {repo.fileCount} files{repo.commit ? ` · ${repo.commit.slice(0, 8)}` : ''} · {timeAgo(repo.updatedAt)}
+          {sourceLabel(repo.url)} · {repo.fileCount} files{repo.commit ? ` · ${repo.commit.slice(0, 8)}` : ''} · {timeAgo(repo.updatedAt)}
         </div>
         {active && (
           <div style={{ marginTop: 8 }}>
@@ -82,8 +83,32 @@ export function Home() {
   const [url, setUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [cfg, setCfg] = useState<{ provider: string; model: string; embeddings: string | null } | null>(null);
+  const [cfg, setCfg] = useState<{ provider: string; model: string; embeddings: string | null; maxUploadMb: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const zipRef = useRef<HTMLInputElement>(null);
+  const dirRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState<number | null>(null);
+  // React has no typed prop for folder pickers.
+  useEffect(() => {
+    dirRef.current?.setAttribute('webkitdirectory', '');
+  }, []);
+
+  const startUpload = async (fd: FormData, bytes: number) => {
+    setError(null);
+    if (cfg && bytes > cfg.maxUploadMb * 1024 * 1024) {
+      setError(`That is ${(bytes / 1024 / 1024).toFixed(0)} MB, over the upload limit of ${cfg.maxUploadMb} MB (MAX_UPLOAD_MB).`);
+      return;
+    }
+    setUploading(0);
+    try {
+      const r = await uploadSource(fd, setUploading);
+      nav(`/repo/${r.repoId}`);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUploading(null);
+    }
+  };
 
   const load = () => api<RepoSummary[]>('/repos').then(setRepos).catch((e) => setError(e.message));
   useEffect(() => {
@@ -95,28 +120,66 @@ export function Home() {
     <div className="page">
       <section className="hero">
         <h1>Understand any codebase</h1>
-        <p>Paste a Git repository URL. The app clones it, maps its structure with static analysis and an LLM, and builds a knowledge base you can explore and ask questions about.</p>
+        <p>Paste a Git repository URL, or upload a ZIP or folder. The app maps its structure with static analysis and an LLM, and builds a knowledge base you can explore and ask questions about.</p>
       </section>
-      <form
-        className="card add-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          setError(null);
-          try {
-            const r = await post<{ repoId: string }>('/repos', { url });
-            setUrl('');
-            nav(`/repo/${r.repoId}`);
-          } catch (err) {
-            setError((err as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <input className="input grow" placeholder="https://github.com/owner/repo  (or owner/repo, optional #branch)" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Repository URL" />
-        <button className="btn primary" disabled={!url.trim() || busy} style={{ height: 38 }}>{busy ? <span className="spinner" /> : 'Analyze'}</button>
-        <button type="button" className="btn" style={{ height: 38 }} onClick={() => fileRef.current?.click()} title="Import a project exported as JSON">Import JSON</button>
+      <div className="card add-card">
+        <form
+          className="add-form"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            setError(null);
+            try {
+              const r = await post<{ repoId: string }>('/repos', { url });
+              setUrl('');
+              nav(`/repo/${r.repoId}`);
+            } catch (err) {
+              setError((err as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <input className="input grow" placeholder="https://github.com/owner/repo  (or owner/repo, optional #branch)" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Repository URL" />
+          <button className="btn primary" disabled={!url.trim() || busy || uploading !== null} style={{ height: 38 }}>{busy ? <span className="spinner" /> : 'Analyze'}</button>
+        </form>
+        <div className="add-alt small">
+          {uploading !== null ? (
+            <>
+              <span className="spinner" />
+              <span className="muted">{uploading < 1 ? `Uploading ${Math.round(uploading * 100)}%` : 'Extracting files…'}</span>
+              <div className="progress grow"><div style={{ width: `${Math.round(uploading * 100)}%` }} /></div>
+            </>
+          ) : (
+            <>
+              <span className="muted">No Git URL?</span>
+              <button type="button" className="btn sm" onClick={() => zipRef.current?.click()} title="Upload the project as a .zip archive (a GitHub 'Download ZIP' works)">Upload ZIP</button>
+              <button type="button" className="btn sm" onClick={() => dirRef.current?.click()} title="Upload a project folder from your computer; node_modules, build output and .gitignored files are left out">Upload folder</button>
+              <span className="muted">· uploads have no git history{cfg ? `, up to ${cfg.maxUploadMb} MB` : ''}</span>
+              <span className="grow" />
+              <button type="button" className="btn sm ghost" onClick={() => fileRef.current?.click()} title="Import a project exported as JSON">Import JSON</button>
+            </>
+          )}
+        </div>
+        <input ref={zipRef} type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (!f) return;
+          const fd = new FormData();
+          fd.append('file', f);
+          void startUpload(fd, f.size);
+        }} />
+        <input ref={dirRef} type="file" multiple hidden onChange={async (e) => {
+          const list = e.target.files;
+          if (!list?.length) return;
+          const { files, paths } = await folderFiles(list);
+          e.target.value = '';
+          if (!files.length) return setError('That folder has no source files to analyze.');
+          const fd = new FormData();
+          fd.append('paths', JSON.stringify(paths));
+          for (const f of files) fd.append('files', f, f.name);
+          void startUpload(fd, files.reduce((n, f) => n + f.size, 0));
+        }} />
         <input
           ref={fileRef}
           type="file"
@@ -135,7 +198,7 @@ export function Home() {
             else nav(`/repo/${body.repoId}`);
           }}
         />
-      </form>
+      </div>
       {error && <div className="error-box" style={{ marginTop: 10 }}>{error}</div>}
       {cfg?.provider === 'mock' && (
         <div className="card small" style={{ padding: '10px 14px', marginTop: 10, borderColor: 'color-mix(in srgb, var(--warn) 40%, var(--border))' }}>

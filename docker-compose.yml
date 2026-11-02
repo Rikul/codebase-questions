@@ -10,8 +10,8 @@ services:
     environment:
       DATA_DIR: /data
     volumes:
-      - data:/data
+      - data-testing:/data
     restart: unless-stopped
 
 volumes:
-  data:
+  data-testing:

@@ -146,3 +146,6 @@ SDK-internal retries are not individually logged. Validation failures report eve
 rejected field path, issue code, and expected type or allowed enum values. Prompts,
 model responses, source contents, credential objects, and SDK error bodies are
 excluded. Existing historical warnings are not retroactively written to logs.
+
+## Maintainer
+Rikul Patel rikulpatel@gmail.com

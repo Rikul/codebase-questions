@@ -140,7 +140,7 @@ export function ReviewView({ path }: { path: string | null }) {
               ) : (
                 <h2 style={{ fontSize: 22, letterSpacing: '-0.01em' }}>Full Codebase Review</h2>
               )}
-              {result && <div className="muted small">Reviewed {new Date(result.createdAt).toLocaleString()}{entries.find((e) => e.path === path)?.stale ? ' · the file has changed since' : ''}</div>}
+              {result && <div className="muted small">Reviewed {new Date(result.createdAt).toLocaleString()}{entries.find((e) => e.path === path)?.stale ? (path ? ' · the file has changed since' : ' · the code has been re-analyzed since; refresh to review the current commit') : ''}</div>}
             </div>
             {(result || (path && !running)) && <button className="btn" disabled={running || (!path && liveFull)} onClick={() => run(true)}>Re-run review</button>}
           </div>

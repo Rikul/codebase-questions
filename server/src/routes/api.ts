@@ -2,7 +2,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import multer from 'multer';
 import type { AskEvent, AskRequest, Category, CommitType, JobEvent, SizeBucket } from '@cq/shared';
-import { CategorySchema, descendants, findConnection } from '@cq/shared';
+import { CategorySchema, defaultExpanded, descendants, findConnection, viewArchitecture } from '@cq/shared';
 import { z } from 'zod';
 import type { Auth } from '../auth.js';
 import { COOKIE_NAME, mintCode } from '../auth.js';
@@ -259,8 +259,15 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   r.get('/repos/:id/connections/:eid', (req, res) => {
     if (!getRepo(req, res)) return;
     const arch = getArchitecture(db, req.params.id);
-    // Diagram edges can stand for several stored links when components are collapsed.
-    const e = arch.connections.find((x) => x.id === req.params.eid) ?? findConnection(arch, req.params.eid);
+    // A diagram edge id names the pair of *visible* components; what it stands for depends on which
+    // components the viewer has expanded (a collapsed one merges its descendants' links). The client
+    // sends its expanded set so the edge resolves exactly as drawn; without it, use the default view.
+    const ids = new Set(arch.components.map((c) => c.id));
+    const expanded =
+      typeof req.query.expanded === 'string'
+        ? new Set(req.query.expanded.split(',').filter((id) => ids.has(id)))
+        : defaultExpanded(arch);
+    const e = viewArchitecture(arch, expanded).connections.find((x) => x.id === req.params.eid) ?? findConnection(arch, req.params.eid);
     if (!e) return void res.status(404).json({ error: 'Connection not found' });
     const snippets = e.evidence.slice(0, 6).map((ev) => ({ ...snippet(db, req.params.id, ev.path, ev.startLine, ev.endLine), note: ev.note ?? null })).filter((s) => s.code != null);
     res.json({ connection: e, from: arch.components.find((c) => c.id === e.from), to: arch.components.find((c) => c.id === e.to), snippets });
@@ -393,6 +400,9 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     if (!row) return;
     const parsed = ReviewRequestSchema.safeParse(req.body);
     if (!parsed.success) return void res.status(400).json({ error: parsed.error.issues[0].message });
+    // While analysis runs the index is being rebuilt, so a review would see partial data (and a full
+    // review started now would later be adopted by the pipeline as the review of the new analysis).
+    if (row.status === 'running' || row.status === 'queued') return void res.status(409).json({ error: 'Analysis is in progress; review the code once it finishes.' });
     await streamTask(res, (emit) => streamReview(db, llm, embeddings, row.id, parsed.data, emit));
   });
 

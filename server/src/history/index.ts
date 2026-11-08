@@ -64,7 +64,23 @@ function parseCommits(out: string) {
 }
 
 /** Index commits and per-file changes from the clone's history (one pass each for statuses and line counts). */
-export async function indexHistory(db: DB, repoId: string, dir: string, info: HistoryInfo, maxCommits: number): Promise<{ commits: number; total: number }> {
+/** Commit types the LLM assigned earlier (sha → type), so re-indexing does not classify them again. */
+export function llmCommitTypes(db: DB, repoId: string): Map<string, string> {
+  return new Map((db.prepare(`SELECT sha, type FROM commits WHERE repo_id=? AND type_source='llm'`).all(repoId) as { sha: string; type: string }[]).map((r) => [r.sha, r.type]));
+}
+
+/**
+ * Index commits and per-file changes. `previousLlmTypes` must be read before anything clears the
+ * `commits` table (the pipeline's clearAnalysis does); it defaults to what the table holds now.
+ */
+export async function indexHistory(
+  db: DB,
+  repoId: string,
+  dir: string,
+  info: HistoryInfo,
+  maxCommits: number,
+  previousLlmTypes: Map<string, string> = llmCommitTypes(db, repoId),
+): Promise<{ commits: number; total: number }> {
   const total = Number((await git(dir, ['rev-list', '--count', 'HEAD'])).trim()) || 0;
   const [statusOut, numOut] = await Promise.all([
     git(dir, ['log', '-n', String(maxCommits), '-M', '--name-status', FMT]),
@@ -86,7 +102,7 @@ export async function indexHistory(db: DB, repoId: string, dir: string, info: Hi
     counts.set(sha.trim(), m);
   }
   // Keep types the LLM assigned on a previous run (by sha), so re-analysis does not classify them again.
-  const llmTypes = new Map((db.prepare(`SELECT sha, type FROM commits WHERE repo_id=? AND type_source='llm'`).all(repoId) as { sha: string; type: string }[]).map((r) => [r.sha, r.type]));
+  const llmTypes = previousLlmTypes;
   const insC = db.prepare(
     'INSERT OR REPLACE INTO commits (repo_id, sha, seq, author, email_hash, date, subject, body, added, deleted, files, type, type_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   );

@@ -22,7 +22,7 @@ import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
 import type { FileFacts } from './parse.js';
 import { buildRefs } from './refs.js';
 import type { HistoryInfo } from '../history/git.js';
-import { indexHistory, repoHistorySummary, storeFileHistorySummaries } from '../history/index.js';
+import { indexHistory, repoHistorySummary, storeFileHistorySummaries, llmCommitTypes } from '../history/index.js';
 import { classifyCommits } from '../history/classify.js';
 import { listCommits, repoStats } from '../history/commits.js';
 import { repoDir } from '../paths.js';
@@ -158,6 +158,7 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   db.prepare(`UPDATE jobs SET status='running' WHERE id=?`).run(jobId);
   db.prepare(`UPDATE repos SET status='running', updated_at=datetime('now') WHERE id=?`).run(repoId);
   const warnings: string[] = [];
+  let review: Promise<void> | null = null;
   try {
     const dir = repoDir(repoId);
     let commit: string | null = null;
@@ -184,11 +185,21 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     }, history, () => {
       db.prepare("UPDATE repos SET status='enriching', updated_at=datetime('now') WHERE id=?").run(repoId);
       emit('review', 'Results available; reviewing the code in the background', analysisProgress('review'));
+    }, (r) => {
+      review = r;
     });
-    db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
-    db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
-    log('info', 'analysis.job.completed', { durationMs: Date.now() - started, warningCount: warnings.length });
-    emit('done', warnings.length ? `Ready (with ${warnings.length} warning(s))` : 'Ready', 1, { done: true });
+    const finish = () => {
+      db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=?`).run(warnings.length ? warnings.slice(0, 5).join('\n') : null, repoId);
+      db.prepare(`UPDATE jobs SET status='done', progress=1 WHERE id=?`).run(jobId);
+      log('info', 'analysis.job.completed', { durationMs: Date.now() - started, warningCount: warnings.length });
+      emit('done', warnings.length ? `Ready (with ${warnings.length} warning(s))` : 'Ready', 1, { done: true });
+    };
+    // The background review runs outside the job queue, so other repositories are not held up.
+    // The repo stays 'enriching' (re-analysis is refused) until it finishes.
+    const pending = review as Promise<void> | null; // assigned by the callback above
+    if (pending) {
+      void pending.then(finish).catch((err: unknown) => log('error', 'analysis.finish.failed', errorDetails(err)));
+    } else finish();
   } catch (err) {
     const msg = (err as Error).message || String(err);
     log('error', 'analysis.job.failed', { durationMs: Date.now() - started, ...errorDetails(err) });
@@ -209,6 +220,11 @@ export async function analyzeDirectory(
   warn: (msg: string) => void = () => undefined,
   history: HistoryInfo | null = null,
   onResultsReady: () => void = () => undefined,
+  /**
+   * When given, the background code review is handed over here instead of awaited, so the caller
+   * (the job queue) can move on while it runs. Without it, analyzeDirectory waits for the review.
+   */
+  onReviewStarted?: (review: Promise<void>) => void,
 ): Promise<{ architecture: Architecture }> {
   const progress = (stage: string, message: string, fraction = 0) => reportProgress(stage, message, analysisProgress(stage, fraction));
   const repo = db.prepare('SELECT name FROM repos WHERE id=?').get(repoId) as { name: string };
@@ -254,6 +270,8 @@ export async function analyzeDirectory(
   }
 
   progress('index', 'Building search index', 0);
+  // clearAnalysis empties `commits`, so keep the LLM-assigned commit types for indexHistory first.
+  const previousCommitTypes = llmCommitTypes(db, repoId);
   clearAnalysis(db, repoId);
   const insFile = db.prepare(
     `INSERT INTO files (repo_id, path, lang, size, hash, lines, meta) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -304,7 +322,7 @@ export async function analyzeDirectory(
   if (history) {
     progress('history', 'Indexing git history', 0);
     try {
-      const { commits } = await indexHistory(db, repoId, dir, history, config.ingest.historyIndexCommits);
+      const { commits } = await indexHistory(db, repoId, dir, history, config.ingest.historyIndexCommits, previousCommitTypes);
       storeFileHistorySummaries(db, repoId);
       progress('history', `Indexed ${commits} commits`, 1);
     } catch (err) {
@@ -351,19 +369,24 @@ export async function analyzeDirectory(
 
   onResultsReady();
   progress('review', 'Reviewing the codebase in the background', 0);
-  let steps = 0;
-  try {
-    // Registered like a user-started review, so the Review tab can follow it live.
-    const run = startReview(db, llm, embeddings, repoId, null, (w) => warn(`Code review: ${w}`));
-    run.listeners.add((e) => {
-      if (e.type === 'step' && e.step.status === 'running') progress('review', `Reviewing: ${e.step.label}`, Math.min(0.95, ++steps / 24));
-      if (e.type === 'error') warn(`Code review failed: ${e.message}`);
-    });
-    await run.done;
-  } catch (err) {
-    log('warn', 'analysis.review.failed', errorDetails(err));
-    warn(`Code review failed: ${(err as Error).message}`);
-  }
+  const review = (async () => {
+    let steps = 0;
+    try {
+      // Registered like a user-started review, so the Review tab can follow it live. Users cannot
+      // start a review while analysis runs (the API refuses), so this is never a stale earlier run.
+      const run = startReview(db, llm, embeddings, repoId, null, (w) => warn(`Code review: ${w}`));
+      run.listeners.add((e) => {
+        if (e.type === 'step' && e.step.status === 'running') progress('review', `Reviewing: ${e.step.label}`, Math.min(0.95, ++steps / 24));
+        if (e.type === 'error') warn(`Code review failed: ${e.message}`);
+      });
+      await run.done;
+    } catch (err) {
+      log('warn', 'analysis.review.failed', errorDetails(err));
+      warn(`Code review failed: ${(err as Error).message}`);
+    }
+  })();
+  if (onReviewStarted) onReviewStarted(review);
+  else await review;
   return { architecture: arch };
 }
 

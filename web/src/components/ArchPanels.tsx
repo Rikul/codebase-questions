@@ -213,13 +213,27 @@ interface Snip {
   note: string | null;
 }
 
-export function ConnectionPanel({ conn, arch, onClose, onSelectComponent }: { conn: Connection; arch: Architecture; onClose: () => void; onSelectComponent: (id: string) => void }) {
+export function ConnectionPanel({
+  conn,
+  arch,
+  expanded,
+  onClose,
+  onSelectComponent,
+}: {
+  conn: Connection;
+  arch: Architecture;
+  /** The diagram's expanded components, so the server resolves the edge exactly as drawn. */
+  expanded?: Set<string>;
+  onClose: () => void;
+  onSelectComponent: (id: string) => void;
+}) {
   const { repo, askAbout, openCode } = useRepo();
   const [snips, setSnips] = useState<Snip[] | null>(null);
   useEffect(() => {
     setSnips(null);
-    api<{ snippets: Snip[] }>(`/repos/${repo.id}/connections/${encodeURIComponent(conn.id)}`).then((r) => setSnips(r.snippets), () => setSnips([]));
-  }, [repo.id, conn.id]);
+    const q = expanded ? `?expanded=${encodeURIComponent([...expanded].join(','))}` : '';
+    api<{ snippets: Snip[] }>(`/repos/${repo.id}/connections/${encodeURIComponent(conn.id)}${q}`).then((r) => setSnips(r.snippets), () => setSnips([]));
+  }, [repo.id, conn.id, expanded]);
   const from = arch.components.find((c) => c.id === conn.from);
   const to = arch.components.find((c) => c.id === conn.to);
   const label = `${from?.name ?? conn.from} → ${to?.name ?? conn.to}`;

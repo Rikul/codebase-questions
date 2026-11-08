@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // Config is read when the app modules load, so set it before importing them.
 process.env.DATA_DIR = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-upload-')), 'data');
@@ -122,6 +122,16 @@ describe('ZIP extraction', () => {
     await expect(extractZip(zip([{ name: 'bomb.ts', data: 'a'.repeat(50_000), declaredSize: 10 }]), dest, limits)).rejects.toThrow(/could be read/);
   });
 
+  it('does not write stored entries whose real size exceeds the declared size', async () => {
+    const dest = tmp();
+    // Many stored entries that each claim 1 byte would pass the MAX_REPO_MB check on declared sizes.
+    const liars = Array.from({ length: 5 }, (_, i) => ({ name: `big${i}.ts`, data: 'x'.repeat(90_000), store: true, declaredSize: 1 }));
+    const r = await extractZip(zip([{ name: 'ok.ts', data: 'export const ok = 1;\n', store: true }, ...liars]), dest, { ...limits, maxBytes: 100_000 });
+    expect(list(dest)).toEqual(['ok.ts']);
+    expect(r.bytes).toBeLessThan(100);
+    expect(r.warnings.join(' ')).toMatch(/Could not write 5 file/);
+  });
+
   it('rejects files that are not ZIP archives', async () => {
     await expect(extractZip(Buffer.from('not a zip at all'), tmp(), limits)).rejects.toThrow(/Not a ZIP/);
   });
@@ -148,11 +158,12 @@ describe('upload route', () => {
     expect(list(repoDir(repoId))).toEqual(['package.json', 'src/server.js']);
 
     await runJob(db, new MockProvider(), null, jobId, repoId);
-    expect(db.prepare('SELECT status, commit_sha FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready', commit_sha: null });
+    // The code review runs after the job hands back the queue; the repo is ready once it finishes.
+    await vi.waitFor(() => expect(db.prepare('SELECT status, commit_sha FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready', commit_sha: null }));
     expect((db.prepare('SELECT path FROM files WHERE repo_id=? ORDER BY path').all(repoId) as any[]).map((f) => f.path)).toEqual(['package.json', 'src/server.js']);
     // Re-analysis reuses the uploaded files.
     await runJob(db, new MockProvider(), null, crypto.randomUUID(), repoId);
-    expect(db.prepare('SELECT status FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready' });
+    await vi.waitFor(() => expect(db.prepare('SELECT status FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready' }));
   });
 
   it('creates a repository from folder files and their relative paths', async () => {

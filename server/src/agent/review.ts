@@ -293,7 +293,8 @@ export async function streamReview(
   const path = req.path ? new RepoIndex(db, repoId).requireFile(req.path) : null;
   if (!req.refresh && !reviewRunning(repoId, path)) {
     const hit = stored(db, repoId, path ? fileKey(path) : FULL_KEY);
-    const current = !path || hit?.version === (new RepoIndex(db, repoId).fileRow(path) as FileRow).hash;
+    // A file review is current for the file's content; a full review for the analyzed commit.
+    const current = hit?.version === (path ? (new RepoIndex(db, repoId).fileRow(path) as FileRow).hash : repoVersion(db, repoId));
     if (hit && current) return void emit({ type: 'result', path, review: hit.review, cached: true, createdAt: hit.createdAt });
   }
   const run = startReview(db, llm, embeddings, repoId, path);
@@ -308,6 +309,7 @@ export async function streamReview(
 
 /** Stored reviews for the sidebar: the full review first, then files by most recent. */
 export function listReviews(db: DB, repoId: string): ReviewEntry[] {
+  const head = repoVersion(db, repoId);
   const rows = db
     .prepare(`SELECT r.key, r.version, r.content, r.created_at, f.hash FROM reviews r
               LEFT JOIN files f ON f.repo_id = r.repo_id AND r.key = 'file:' || f.path
@@ -318,12 +320,14 @@ export function listReviews(db: DB, repoId: string): ReviewEntry[] {
     const findings = review?.findings ?? [];
     const worst = findings.length ? findings.reduce((w, f) => (rank(f.severity) < rank(w) ? f.severity : w), findings[0].severity) : null;
     const path = r.key === FULL_KEY ? null : String(r.key).slice('file:'.length);
-    return { path, createdAt: r.created_at, findings: findings.length, worst, ...(path ? { stale: r.hash !== r.version } : {}) };
+    return { path, createdAt: r.created_at, findings: findings.length, worst, stale: path ? r.hash !== r.version : r.version !== head };
   });
 }
 
 /** A stored review, or null when there is none. */
-export function getReview(db: DB, repoId: string, path: string | null): { review: Review; createdAt: string } | null {
+export function getReview(db: DB, repoId: string, path: string | null): { review: Review; createdAt: string; stale: boolean } | null {
   const hit = stored(db, repoId, path ? fileKey(path) : FULL_KEY);
-  return hit && { review: hit.review, createdAt: hit.createdAt };
+  if (!hit) return null;
+  const version = path ? (db.prepare('SELECT hash FROM files WHERE repo_id=? AND path=?').get(repoId, path) as { hash: string } | undefined)?.hash : repoVersion(db, repoId);
+  return { review: hit.review, createdAt: hit.createdAt, stale: hit.version !== version };
 }

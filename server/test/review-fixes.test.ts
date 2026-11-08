@@ -173,3 +173,22 @@ describe('review fixes', () => {
     expect(db.prepare(`SELECT status FROM repos WHERE id='lock'`).get()).toMatchObject({ status: 'ready' });
   });
 });
+
+describe('settleAfterReview', async () => {
+  const { settleAfterReview } = await import('../src/ingest/pipeline.js');
+  it('runs recovery when the finish step throws, so the repo is not left enriching', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('fin', 'x', 'https://github.com/a/b', 'enriching')`).run();
+    await settleAfterReview(
+      Promise.resolve(),
+      () => {
+        throw new Error('disk I/O error');
+      },
+      (err) => db.prepare(`UPDATE repos SET status='ready', error=? WHERE id='fin'`).run(String((err as Error).message)),
+    );
+    expect(db.prepare(`SELECT status, error FROM repos WHERE id='fin'`).get()).toEqual({ status: 'ready', error: 'disk I/O error' });
+  });
+  it('does not throw when recovery fails too', async () => {
+    await expect(settleAfterReview(Promise.reject(new Error('a')), () => undefined, () => { throw new Error('b'); })).resolves.toBeUndefined();
+  });
+});

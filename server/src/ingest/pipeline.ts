@@ -198,7 +198,15 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     // The repo stays 'enriching' (re-analysis is refused) until it finishes.
     const pending = review as Promise<void> | null; // assigned by the callback above
     if (pending) {
-      void pending.then(finish).catch((err: unknown) => log('error', 'analysis.finish.failed', errorDetails(err)));
+      void settleAfterReview(pending, finish, (err) => {
+        // The synchronous path's catch below no longer covers this, so leave a final status here:
+        // the results are usable ('ready'), and the job is marked failed with the reason.
+        log('error', 'analysis.finish.failed', errorDetails(err));
+        const msg = `Finishing the analysis failed: ${(err as Error)?.message ?? String(err)}`;
+        db.prepare(`UPDATE repos SET status='ready', error=?, updated_at=datetime('now') WHERE id=? AND status='enriching'`).run(msg, repoId);
+        db.prepare(`UPDATE jobs SET status='failed', error=? WHERE id=?`).run(msg, jobId);
+        emit('failed', msg, 1, { done: true, error: msg });
+      });
     } else finish();
   } catch (err) {
     const msg = (err as Error).message || String(err);
@@ -210,6 +218,23 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
 }
 
 /** Run static ingestion + LLM analysis over a checked-out directory and persist everything. */
+/**
+ * Run `finish` once the background review settles. If `finish` throws, `recover` runs so the
+ * repo and job still end in a final status; a failure in `recover` itself is only logged.
+ */
+export async function settleAfterReview(review: Promise<void>, finish: () => void, recover: (err: unknown) => void): Promise<void> {
+  try {
+    await review;
+    finish();
+  } catch (err) {
+    try {
+      recover(err);
+    } catch (again) {
+      log('error', 'analysis.recover.failed', errorDetails(again));
+    }
+  }
+}
+
 export async function analyzeDirectory(
   db: DB,
   llm: LLMProvider,

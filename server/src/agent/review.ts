@@ -276,12 +276,12 @@ export function startReview(
   return run;
 }
 
-/** Whether a review is running for the full codebase (path null) or a file. */
 /** Settles when the review running for this repo/path (if any) finishes; never starts one. */
 export function waitForReview(repoId: string, path: string | null): Promise<void> {
   return (live.get(liveId(repoId, path ? fileKey(path) : FULL_KEY))?.done ?? Promise.resolve()).catch(() => undefined);
 }
 
+/** Whether a review is running for the full codebase (path null) or a file. */
 export function reviewRunning(repoId: string, path: string | null): boolean {
   return live.has(liveId(repoId, path ? fileKey(path) : FULL_KEY));
 }

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { Review, ReviewEntry, ReviewEvent, ReviewFinding, ReviewSeverity } from '@cq/shared';
 import { REVIEW_SEVERITIES, ReviewSchema, componentTitle, defaultView } from '@cq/shared';
 import { getArchitecture } from '../routes/queries.js';
@@ -148,14 +149,22 @@ function fullContext(db: DB, repoId: string): string {
     .join('\n\n');
 }
 
-/** The version a full review is written against: the analyzed commit. */
-function repoVersion(db: DB, repoId: string): string {
+/**
+ * The version a full review is written against: the analyzed commit, or for uploads (which have
+ * no commit) a digest of the indexed files' paths and content hashes, so a changed upload counts as new code.
+ */
+export function repoVersion(db: DB, repoId: string): string {
   const r = db.prepare('SELECT commit_sha FROM repos WHERE id=?').get(repoId) as { commit_sha: string | null } | undefined;
-  return r?.commit_sha ?? 'unknown';
+  if (r?.commit_sha) return r.commit_sha;
+  const h = crypto.createHash('sha1');
+  for (const f of db.prepare('SELECT path, hash FROM files WHERE repo_id=? ORDER BY path').iterate(repoId) as Iterable<{ path: string; hash: string }>) h.update(`${f.path}\0${f.hash}\n`);
+  return `content:${h.digest('hex')}`;
 }
 
 /** Review the whole codebase and store the result. */
 async function runFull(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider | null, repoId: string, emit: (e: ReviewEvent) => void, onWarn?: (msg: string) => void): Promise<void> {
+  // Record the version the review starts from: if the code is re-analyzed meanwhile, the result is stale.
+  const version = repoVersion(db, repoId);
   const ix = new RepoIndex(db, repoId, embeddings);
   const run = await agentWithFallback(
     llm,
@@ -185,7 +194,7 @@ async function runFull(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider |
   );
   const review = clean(ix, run.final as Review);
   if (!db.prepare('SELECT 1 FROM repos WHERE id=?').get(repoId)) return;
-  const createdAt = save(db, repoId, FULL_KEY, repoVersion(db, repoId), review);
+  const createdAt = save(db, repoId, FULL_KEY, version, review);
   emit({ type: 'result', path: null, review, cached: false, createdAt });
 }
 
@@ -267,6 +276,11 @@ export function startReview(
   return run;
 }
 
+/** Settles when the review running for this repo/path (if any) finishes; never starts one. */
+export function waitForReview(repoId: string, path: string | null): Promise<void> {
+  return (live.get(liveId(repoId, path ? fileKey(path) : FULL_KEY))?.done ?? Promise.resolve()).catch(() => undefined);
+}
+
 /** Whether a review is running for the full codebase (path null) or a file. */
 export function reviewRunning(repoId: string, path: string | null): boolean {
   return live.has(liveId(repoId, path ? fileKey(path) : FULL_KEY));
@@ -293,7 +307,8 @@ export async function streamReview(
   const path = req.path ? new RepoIndex(db, repoId).requireFile(req.path) : null;
   if (!req.refresh && !reviewRunning(repoId, path)) {
     const hit = stored(db, repoId, path ? fileKey(path) : FULL_KEY);
-    const current = !path || hit?.version === (new RepoIndex(db, repoId).fileRow(path) as FileRow).hash;
+    // A file review is current for the file's content; a full review for the analyzed commit.
+    const current = hit?.version === (path ? (new RepoIndex(db, repoId).fileRow(path) as FileRow).hash : repoVersion(db, repoId));
     if (hit && current) return void emit({ type: 'result', path, review: hit.review, cached: true, createdAt: hit.createdAt });
   }
   const run = startReview(db, llm, embeddings, repoId, path);
@@ -308,6 +323,7 @@ export async function streamReview(
 
 /** Stored reviews for the sidebar: the full review first, then files by most recent. */
 export function listReviews(db: DB, repoId: string): ReviewEntry[] {
+  const head = repoVersion(db, repoId);
   const rows = db
     .prepare(`SELECT r.key, r.version, r.content, r.created_at, f.hash FROM reviews r
               LEFT JOIN files f ON f.repo_id = r.repo_id AND r.key = 'file:' || f.path
@@ -318,12 +334,14 @@ export function listReviews(db: DB, repoId: string): ReviewEntry[] {
     const findings = review?.findings ?? [];
     const worst = findings.length ? findings.reduce((w, f) => (rank(f.severity) < rank(w) ? f.severity : w), findings[0].severity) : null;
     const path = r.key === FULL_KEY ? null : String(r.key).slice('file:'.length);
-    return { path, createdAt: r.created_at, findings: findings.length, worst, ...(path ? { stale: r.hash !== r.version } : {}) };
+    return { path, createdAt: r.created_at, findings: findings.length, worst, stale: path ? r.hash !== r.version : r.version !== head };
   });
 }
 
 /** A stored review, or null when there is none. */
-export function getReview(db: DB, repoId: string, path: string | null): { review: Review; createdAt: string } | null {
+export function getReview(db: DB, repoId: string, path: string | null): { review: Review; createdAt: string; stale: boolean } | null {
   const hit = stored(db, repoId, path ? fileKey(path) : FULL_KEY);
-  return hit && { review: hit.review, createdAt: hit.createdAt };
+  if (!hit) return null;
+  const version = path ? (db.prepare('SELECT hash FROM files WHERE repo_id=? AND path=?').get(repoId, path) as { hash: string } | undefined)?.hash : repoVersion(db, repoId);
+  return { review: hit.review, createdAt: hit.createdAt, stale: hit.version !== version };
 }

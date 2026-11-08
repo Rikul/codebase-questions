@@ -74,7 +74,11 @@ export async function writeEntries(entries: UploadEntry[], dest: string, limits:
     if (!target.startsWith(base + path.sep)) continue;
     try {
       const data = await e.read();
-      if (data.length > limits.maxFileBytes) continue;
+      // MAX_REPO_MB was checked against declared sizes; never write more than an entry declared.
+      if (data.length > e.size || data.length > limits.maxFileBytes) {
+        failed++;
+        continue;
+      }
       fs.mkdirSync(path.dirname(target), { recursive: true });
       // 'wx' refuses to follow or replace anything already there; no executable bits.
       fs.writeFileSync(target, data, { flag: 'wx', mode: 0o644 });
@@ -158,7 +162,12 @@ export function zipEntries(buf: Buffer, warnings: string[] = []): UploadEntry[] 
         const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
         const data = buf.subarray(start, start + compSize);
         if (data.length !== compSize) throw new Error('truncated entry');
-        if (method === 0) return Buffer.from(data);
+        if (method === 0) {
+          // Stored entries hold the file as-is: their length must match the declared size,
+          // which is what the upload limits were checked against.
+          if (compSize !== size) throw new Error('size mismatch');
+          return Buffer.from(data);
+        }
         if (size === 0) return Buffer.alloc(0);
         // Cap the output at the declared size so a lying header cannot inflate past the limits.
         const res = await inflateRaw(data, { maxOutputLength: size });

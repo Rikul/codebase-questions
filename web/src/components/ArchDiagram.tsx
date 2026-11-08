@@ -635,7 +635,7 @@ function Diagram({ arch }: { arch: Architecture }) {
       {!drill && comp && (
         <ComponentPanel comp={comp} arch={shownArch} onClose={() => setSel(null)} onSelectConnection={(id) => setSel({ kind: 'connection', id })} onDrill={() => setDrill(comp)} />
       )}
-      {!drill && conn && <ConnectionPanel conn={conn} arch={shownArch} onClose={() => setSel(null)} onSelectComponent={(id) => setSel({ kind: 'component', id })} />}
+      {!drill && conn && <ConnectionPanel conn={conn} arch={shownArch} expanded={expanded} onClose={() => setSel(null)} onSelectComponent={(id) => setSel({ kind: 'component', id })} />}
     </>
   );
 }

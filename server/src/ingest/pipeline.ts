@@ -9,7 +9,7 @@ import { config } from '../config.js';
 import type { DB } from '../db/index.js';
 import { clearAnalysis } from '../db/index.js';
 import type { EmbeddingProvider, LLMProvider } from '../llm/index.js';
-import { startReview } from '../agent/review.js';
+import { reviewRunning, startReview } from '../agent/review.js';
 import { staticArchitecture } from '../analyze/architecture.js';
 import { annotateComponents } from '../analyze/labels.js';
 import type { RepoContext } from '../analyze/context.js';
@@ -374,6 +374,9 @@ export async function analyzeDirectory(
     try {
       // Registered like a user-started review, so the Review tab can follow it live. Users cannot
       // start a review while analysis runs (the API refuses), so this is never a stale earlier run.
+      // A full review can only be live here if it started before this analysis (the API refuses both
+      // orders now); let it finish, then review the freshly analyzed code rather than adopting it.
+      if (reviewRunning(repoId, null)) await startReview(db, llm, embeddings, repoId, null).done.catch(() => undefined);
       const run = startReview(db, llm, embeddings, repoId, null, (w) => warn(`Code review: ${w}`));
       run.listeners.add((e) => {
         if (e.type === 'step' && e.step.status === 'running') progress('review', `Reviewing: ${e.step.label}`, Math.min(0.95, ++steps / 24));

@@ -18,7 +18,7 @@ const { openDb } = await import('../src/db/index.js');
 const { createApp } = await import('../src/index.js');
 const { analyzeDirectory, saveAnalysis } = await import('../src/ingest/pipeline.js');
 const { prepareCheckout } = await import('../src/ingest/clone.js');
-const { getReview, listReviews, streamReview } = await import('../src/agent/review.js');
+const { getReview, listReviews, startReview, streamReview } = await import('../src/agent/review.js');
 const { MockProvider } = await import('../src/llm/mock.js');
 const { repoDir } = await import('../src/paths.js');
 
@@ -117,5 +117,59 @@ describe('review fixes', () => {
     open();
     await review;
     expect(getReview(db, 'bg', null)).not.toBeNull();
+  });
+
+  // ---- PR #4 review follow-ups ----
+
+  /** A provider whose code review only finishes when `open()` is called. */
+  function gatedReviewer() {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    class Gated extends MockProvider {
+      override async runAgent<T>(opts: AgentOptions<T>) {
+        if (opts.final?.name === 'review') await gate;
+        return super.runAgent(opts);
+      }
+    }
+    return { llm: new Gated(), open };
+  }
+
+  it('versions full reviews of uploads (no commit) by their content', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('up', 'up', 'upload:up.zip', 'running')`).run();
+    await analyzeDirectory(db, new MockProvider(), null, 'up', FIXTURE, () => undefined);
+    expect(getReview(db, 'up', null)).toMatchObject({ stale: false });
+    // A changed upload, re-analyzed: different file content means the old review is stale.
+    db.prepare(`UPDATE files SET hash='changed' WHERE repo_id='up' AND path='src/index.ts'`).run();
+    expect(getReview(db, 'up', null)).toMatchObject({ stale: true });
+    expect(listReviews(db, 'up')[0]).toMatchObject({ path: null, stale: true });
+  });
+
+  it('records a full review against the version it started from', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status, commit_sha) VALUES ('race', 'acme/demo', 'https://github.com/acme/demo', 'running', 'old111')`).run();
+    await analyzeDirectory(db, new MockProvider(), null, 'race', FIXTURE, () => undefined);
+    const { llm, open } = gatedReviewer();
+    const run = startReview(db, llm, null, 'race', null);
+    db.prepare(`UPDATE repos SET commit_sha='new222' WHERE id='race'`).run(); // re-analyzed while it ran
+    open();
+    await run.done;
+    expect(getReview(db, 'race', null)).toMatchObject({ stale: true });
+  });
+
+  it('refuses re-analysis while a code review is running', async () => {
+    const db = openDb(':memory:');
+    db.prepare(`INSERT INTO repos (id, name, url, status, commit_sha) VALUES ('lock', 'acme/demo', 'https://github.com/acme/demo', 'running', 'abc')`).run();
+    await analyzeDirectory(db, new MockProvider(), null, 'lock', FIXTURE, () => undefined);
+    db.prepare(`UPDATE repos SET status='ready' WHERE id='lock'`).run();
+    const { llm, open } = gatedReviewer();
+    const app = createApp(db, llm, null, new Auth(db, crypto.randomBytes(32)));
+    const review = request(app).post('/api/repos/lock/review').send({ refresh: true }).then((r) => r);
+    await new Promise((r) => setTimeout(r, 100)); // the review is now registered and waiting
+    const res = await request(app).post('/api/repos/lock/reanalyze').send({}).expect(409);
+    expect(res.body.error).toMatch(/code review is running/);
+    open();
+    await review;
+    expect(db.prepare(`SELECT status FROM repos WHERE id='lock'`).get()).toMatchObject({ status: 'ready' });
   });
 });

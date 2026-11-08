@@ -213,6 +213,9 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     const row = getRepo(req, res);
     if (!row) return;
     if (row.status === 'running' || row.status === 'queued' || row.status === 'enriching') return void res.status(409).json({ error: 'Analysis already in progress' });
+    // A review in flight reads the index that re-analysis rebuilds. Starting a review checks the
+    // status and registers the run in the same synchronous step, so this check and that one cannot interleave.
+    if (reviewRunning(row.id, null) || runningFileReviews(row.id).length) return void res.status(409).json({ error: 'A code review is running; re-analyze when it finishes.' });
     invalidateVectors(row.id);
     res.json({ jobId: enqueue(db, row.id) });
   });

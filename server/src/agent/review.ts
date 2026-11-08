@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type { Review, ReviewEntry, ReviewEvent, ReviewFinding, ReviewSeverity } from '@cq/shared';
 import { REVIEW_SEVERITIES, ReviewSchema, componentTitle, defaultView } from '@cq/shared';
 import { getArchitecture } from '../routes/queries.js';
@@ -148,14 +149,22 @@ function fullContext(db: DB, repoId: string): string {
     .join('\n\n');
 }
 
-/** The version a full review is written against: the analyzed commit. */
-function repoVersion(db: DB, repoId: string): string {
+/**
+ * The version a full review is written against: the analyzed commit, or for uploads (which have
+ * no commit) a digest of the indexed files' paths and content hashes, so a changed upload counts as new code.
+ */
+export function repoVersion(db: DB, repoId: string): string {
   const r = db.prepare('SELECT commit_sha FROM repos WHERE id=?').get(repoId) as { commit_sha: string | null } | undefined;
-  return r?.commit_sha ?? 'unknown';
+  if (r?.commit_sha) return r.commit_sha;
+  const h = crypto.createHash('sha1');
+  for (const f of db.prepare('SELECT path, hash FROM files WHERE repo_id=? ORDER BY path').iterate(repoId) as Iterable<{ path: string; hash: string }>) h.update(`${f.path}\0${f.hash}\n`);
+  return `content:${h.digest('hex')}`;
 }
 
 /** Review the whole codebase and store the result. */
 async function runFull(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider | null, repoId: string, emit: (e: ReviewEvent) => void, onWarn?: (msg: string) => void): Promise<void> {
+  // Record the version the review starts from: if the code is re-analyzed meanwhile, the result is stale.
+  const version = repoVersion(db, repoId);
   const ix = new RepoIndex(db, repoId, embeddings);
   const run = await agentWithFallback(
     llm,
@@ -185,7 +194,7 @@ async function runFull(db: DB, llm: LLMProvider, embeddings: EmbeddingProvider |
   );
   const review = clean(ix, run.final as Review);
   if (!db.prepare('SELECT 1 FROM repos WHERE id=?').get(repoId)) return;
-  const createdAt = save(db, repoId, FULL_KEY, repoVersion(db, repoId), review);
+  const createdAt = save(db, repoId, FULL_KEY, version, review);
   emit({ type: 'result', path: null, review, cached: false, createdAt });
 }
 

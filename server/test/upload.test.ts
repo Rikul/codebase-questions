@@ -252,7 +252,7 @@ describe('uploaded git history', () => {
     const dest = tmp();
     const r = await extractZip(zipDir(src, (rel) => rel === `.git/objects/${blob.slice(0, 2)}/${blob.slice(2)}`), dest, historyLimits);
     expect(r.history).toBe(true);
-    const v = await verifyUploadedHistory(dest);
+    const v = await verifyUploadedHistory(dest, { depth: 0, maxMb: 500 });
     expect(v).toMatchObject({ history: null, warning: expect.stringMatching(/incomplete or unreadable/) });
     expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
     expect(list(dest)).toEqual(['src/app.js']);
@@ -269,6 +269,15 @@ describe('uploaded git history', () => {
     const bad = await extractZip(zipDir(src), dest, historyLimits);
     expect(bad).toMatchObject({ history: false, warnings: [expect.stringMatching(/unexpected HEAD/)] });
     expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
+  });
+
+  it('applies the current HISTORY_DEPTH and MAX_HISTORY_MB on each analysis, without deleting the history', async () => {
+    const dest = tmp();
+    expect((await extractZip(zipDir(project(true)), dest, historyLimits)).history).toBe(true);
+    expect(await verifyUploadedHistory(dest, { depth: -1, maxMb: 500 })).toEqual({ history: null });
+    expect(await verifyUploadedHistory(dest, { depth: 0, maxMb: 0 })).toMatchObject({ history: null, warning: expect.stringMatching(/MAX_HISTORY_MB=0/) });
+    expect(fs.existsSync(path.join(dest, '.git'))).toBe(true);
+    expect((await verifyUploadedHistory(dest, { depth: 0, maxMb: 500 })).history).not.toBeNull();
   });
 
   it('rejects a HEAD that climbs out of refs/heads', async () => {

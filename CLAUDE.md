@@ -53,7 +53,7 @@ When adding an LLM feature, provide the heuristic/scripted path so offline mode 
 
 - Never execute code from analyzed repos (no installs, scripts, or hooks). `git` is run with fixed arg lists, no shell, `https://` URLs only, no symlink following; file reads stay inside the checkout.
 - Uploads (`ingest/upload.ts`) never write outside the checkout: entry paths are validated, symlinks and nested `.git` folders are skipped; of the top-level `.git` only HEAD, refs and objects are kept (`isUploadGitPath` in `shared/`; never config, hooks, info/, alternates, worktrees or modules, which can make git run commands or read outside the checkout) and the server writes its own minimal config, files are written without executable bits, and size/file limits are checked before writing.
-- The kept `.git` is scrubbed of credentials/reflogs (`prepareCheckout` in `clone.ts`) and only read-only git commands run on it (plus the fetch/reset that updates it on re-analysis, with hooks disabled and the token passed only on the command line); it is deleted if `HISTORY_DEPTH < 0` or over `MAX_HISTORY_MB`. `GITHUB_TOKEN` must never reach disk or logs.
+- The kept `.git` is scrubbed of credentials/reflogs (`prepareCheckout` in `clone.ts`) and only read-only git commands run on it (plus the fetch/reset that updates it on re-analysis, with hooks disabled and the token passed only on the command line); it is deleted if `HISTORY_DEPTH < 0` or over `MAX_HISTORY_MB` (an uploaded history is skipped instead, since it cannot be fetched again). `GITHUB_TOKEN` must never reach disk or logs.
 
 ## Tests
 

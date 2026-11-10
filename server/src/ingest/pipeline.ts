@@ -169,7 +169,7 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       if (!fs.existsSync(dir)) throw new Error('The uploaded files are missing on the server; upload the project again.');
       emit('clone', `Using uploaded files (${repo.url.slice(UPLOAD_URL_PREFIX.length)})`, analysisProgress('clone'));
       // A history that came with the upload is checked on every analysis (it is kept for re-analysis).
-      const uploaded = await verifyUploadedHistory(dir);
+      const uploaded = await verifyUploadedHistory(dir, { depth: config.ingest.historyDepth, maxMb: config.ingest.maxHistoryMb });
       history = uploaded.history;
       if (uploaded.warning) warnings.push(uploaded.warning);
     } else {

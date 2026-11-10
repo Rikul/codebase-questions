@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { Architecture, ProjectExport } from '@cq/shared';
 import { EXPORT_FORMAT, ExportSchema } from '@cq/shared';
 import type { DB } from '../db/index.js';
-import { json } from '../db/index.js';
+import { backfillCommitStats, json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
 import { storeFileHistorySummaries } from '../history/index.js';
@@ -133,7 +133,11 @@ export function importProject(db: DB, data: unknown): string {
     const insR = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     for (const r of p.refs ?? []) insR.run(repoId, r.name, r.path, r.line, r.kind, r.fromSymbol, r.targetPath, r.targetLine, r.confidence);
     if (p.chunks?.length) db.prepare('UPDATE repos SET has_source=1 WHERE id=?').run(repoId);
-    if (p.history) storeFileHistorySummaries(db, repoId);
+    if (p.history) {
+      // Exports from older versions lack commit stats and types; fill them like migrate() does at open.
+      backfillCommitStats(db, repoId);
+      storeFileHistorySummaries(db, repoId);
+    }
   })();
   return repoId;
 }

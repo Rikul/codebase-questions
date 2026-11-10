@@ -59,7 +59,7 @@ export function cleanEntryPath(raw: string): string | null {
 
 // The only git config an uploaded history gets: no hooks, filters, drivers or remotes.
 const UPLOAD_GIT_CONFIG = '[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n';
-const HEAD_RE = /^(ref: refs\/heads\/[\w.\-/]+|[0-9a-f]{40})\n?$/;
+const HEAD_RE = /^(ref: refs\/heads\/(?!.*\.\.)[\w.\-/]+|[0-9a-f]{40})\n?$/;
 
 type Entry = UploadEntry & { rel: string };
 

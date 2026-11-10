@@ -110,10 +110,19 @@ export async function verifyUploadedHistory(dir: string): Promise<{ history: His
   try {
     await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
     // Walks every reachable commit, tree and blob: fails on a missing or corrupt object.
-    await git(dir, ['rev-list', '--objects', '--count', 'HEAD'], { timeoutMs: 120_000 });
+    await git(dir, ['rev-list', '--objects', '--count', 'HEAD'], { timeoutMs: 300_000 });
     return { history: await readHistoryInfo(dir, 0) };
-  } catch {
+  } catch (err) {
+    // Only git's own verdict means the history is broken; a timeout or a failure to start git
+    // leaves it in place for the next analysis.
+    if (!gitRejected(err)) return { history: null, warning: 'Could not check the uploaded git history (git timed out or did not run); continuing without history this time.' };
     fs.rmSync(gitDir, { recursive: true, force: true });
     return { history: null, warning: 'The uploaded git history is incomplete or unreadable; continuing without history.' };
   }
+}
+
+/** True when git ran to completion and exited with an error (not killed by a timeout, not a spawn failure). */
+export function gitRejected(err: unknown): boolean {
+  const e = err as { code?: unknown; killed?: boolean; signal?: unknown } | null;
+  return typeof e?.code === 'number' && !e.killed && !e.signal;
 }

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,7 +18,9 @@ const { runJob } = await import('../src/ingest/pipeline.js');
 const { cleanEntryPath, extractZip } = await import('../src/ingest/upload.js');
 const { MockProvider } = await import('../src/llm/mock.js');
 const { repoDir } = await import('../src/paths.js');
-const { verifyUploadedHistory } = await import('../src/history/git.js');
+const { gitRejected, verifyUploadedHistory } = await import('../src/history/git.js');
+
+const execFileAsync = promisify(execFile);
 
 /** Build a ZIP in memory. Entries may be deflated, stored, symlinks, or lie about their size. */
 function zip(entries: { name: string; data?: string | Buffer; store?: boolean; symlink?: boolean; declaredSize?: number }[]): Buffer {
@@ -266,6 +269,27 @@ describe('uploaded git history', () => {
     const bad = await extractZip(zipDir(src), dest, historyLimits);
     expect(bad).toMatchObject({ history: false, warnings: [expect.stringMatching(/unexpected HEAD/)] });
     expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
+  });
+
+  it('rejects a HEAD that climbs out of refs/heads', async () => {
+    const src = project(false);
+    fs.writeFileSync(path.join(src, '.git/HEAD'), 'ref: refs/heads/../../../x\n');
+    expect(await extractZip(zipDir(src), tmp(), historyLimits)).toMatchObject({ history: false, warnings: [expect.stringMatching(/unexpected HEAD/)] });
+  });
+
+  it('deletes uploaded history only when git rejects it, not when git times out or does not start', async () => {
+    expect(gitRejected(Object.assign(new Error('exit 128'), { code: 128, killed: false, signal: null }))).toBe(true);
+    expect(gitRejected(Object.assign(new Error('timed out'), { code: null, killed: true, signal: 'SIGTERM' }))).toBe(false);
+    expect(gitRejected(Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }))).toBe(false);
+    // The error a real timed-out child process gives.
+    const timedOut = (async () => {
+      try {
+        await execFileAsync('sleep', ['5'], { timeout: 10 });
+      } catch (err) {
+        return gitRejected(err);
+      }
+    })();
+    expect(await timedOut).toBe(false);
   });
 
   it('drops nested .git folders (submodules, vendored checkouts)', async () => {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { compactDb, openDb } from '../src/db/index.js';
 
 describe('deleting a repository', () => {
@@ -40,6 +40,30 @@ describe('deleting a repository', () => {
     db.exec('DELETE FROM t');
     expect(db.pragma('freelist_count', { simple: true })).toBeGreaterThan(0);
     await expect(compactDb(db, 10)).resolves.toBeDefined();
+  });
+
+  it('still opens a legacy database when the one-time conversion fails', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-db-')), 'codebase.db');
+    const legacy = new Database(file);
+    legacy.exec('CREATE TABLE old (x)');
+    legacy.close();
+    const original = Database.prototype.exec;
+    // What a locked database or a full disk does to the VACUUM.
+    const spy = vi.spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database.Database, sql: string) {
+      if (sql === 'VACUUM') throw new Error('database or disk is full');
+      return original.call(this, sql);
+    });
+    try {
+      const db = openDb(file);
+      expect(db.pragma('auto_vacuum', { simple: true })).toBe(0); // retried at the next open
+      expect(db.prepare(`SELECT count(*) AS n FROM repos`).get()).toEqual({ n: 0 });
+      db.close();
+    } finally {
+      spy.mockRestore();
+    }
+    const db = openDb(file);
+    expect(db.pragma('auto_vacuum', { simple: true })).toBe(2);
+    db.close();
   });
 
   it('converts a database created without incremental auto-vacuum when it is opened', () => {

@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { commitTypeOf } from '../history/types.js';
+import { errorDetails, log } from '../logging/index.js';
 
 export type DB = Database.Database;
 
@@ -243,15 +244,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 export function openDb(file: string): DB {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
+  db.pragma('busy_timeout = 5000');
   // Incremental auto-vacuum lets compactDb() return freed space in small steps instead of one
   // blocking VACUUM, and secure_delete zeroes deleted content so it does not linger in free space.
-  // It must be set before the first table is created; older databases are converted once, here at startup.
+  // It must be set before the first table is created; older databases are converted once, here at
+  // startup. A failed conversion (locked, or not enough disk for the copy) does not stop the app:
+  // it is retried at the next start, and compactDb() stops when it can free nothing.
   db.pragma('auto_vacuum = INCREMENTAL');
-  if (db.pragma('auto_vacuum', { simple: true }) !== 2) db.exec('VACUUM');
+  if (db.pragma('auto_vacuum', { simple: true }) !== 2) {
+    try {
+      db.exec('VACUUM');
+    } catch (err) {
+      log('warn', 'db.autovacuum.convert.failed', errorDetails(err));
+    }
+  }
   db.pragma('secure_delete = ON');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
   migrate(db);
   return db;

@@ -332,8 +332,13 @@ export function clearAnalysis(db: DB, repoId: string) {
 export async function compactDb(db: DB, pagesPerStep = 1000): Promise<{ beforeMb: number; afterMb: number }> {
   const size = () => (db.pragma('page_count', { simple: true }) as number) * (db.pragma('page_size', { simple: true }) as number) / 1024 / 1024;
   const beforeMb = size();
-  while ((db.pragma('freelist_count', { simple: true }) as number) > 0) {
+  const free = () => db.pragma('freelist_count', { simple: true }) as number;
+  for (let left = free(); left > 0; ) {
     db.pragma(`incremental_vacuum(${Math.max(1, Math.floor(pagesPerStep))})`);
+    const now = free();
+    // No progress (e.g. a database not in incremental mode): stop rather than spin.
+    if (now >= left) break;
+    left = now;
     await new Promise((r) => setImmediate(r));
   }
   db.pragma('wal_checkpoint(TRUNCATE)');

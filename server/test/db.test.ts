@@ -31,6 +31,17 @@ describe('deleting a repository', () => {
     expect(bytes.includes(secret)).toBe(false);
   });
 
+  it('stops compacting when a step frees nothing (database not in incremental mode)', async () => {
+    const db = new Database(':memory:');
+    db.exec('CREATE TABLE t (x)');
+    db.transaction(() => {
+      for (let i = 0; i < 2000; i++) db.prepare('INSERT INTO t VALUES (?)').run('x'.repeat(400));
+    })();
+    db.exec('DELETE FROM t');
+    expect(db.pragma('freelist_count', { simple: true })).toBeGreaterThan(0);
+    await expect(compactDb(db, 10)).resolves.toBeDefined();
+  });
+
   it('converts a database created without incremental auto-vacuum when it is opened', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-db-')), 'codebase.db');
     const legacy = new Database(file);

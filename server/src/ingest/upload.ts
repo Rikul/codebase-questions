@@ -158,9 +158,13 @@ async function writeGitHistory(base: string, entries: Entry[], maxBytes: number,
   for (const e of entries) {
     if ((await writeEntry(gitDir, e.rel, e, maxBytes)) === null) return drop('could not be written (duplicate or unreadable entries)');
   }
-  // git only treats the folder as a repository with these present (a packed history may lack them).
-  for (const d of ['refs/heads', 'refs/tags', 'objects/pack', 'objects/info']) fs.mkdirSync(path.join(gitDir, d), { recursive: true });
-  fs.writeFileSync(path.join(gitDir, 'config'), UPLOAD_GIT_CONFIG, { flag: 'wx', mode: 0o644 });
+  try {
+    // git only treats the folder as a repository with these present (a packed history may lack them).
+    for (const d of ['refs/heads', 'refs/tags', 'objects/pack', 'objects/info']) fs.mkdirSync(path.join(gitDir, d), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, 'config'), UPLOAD_GIT_CONFIG, { flag: 'wx', mode: 0o644 });
+  } catch {
+    return drop('has an unexpected layout');
+  }
   return true;
 }
 

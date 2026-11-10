@@ -301,6 +301,22 @@ describe('uploaded git history', () => {
     expect(await timedOut).toBe(false);
   });
 
+  it('drops a malformed .git layout but keeps the upload', async () => {
+    const dest = tmp();
+    const r = await extractZip(
+      zip([
+        { name: 'p/src/a.ts', data: 'x' },
+        { name: 'p/.git/HEAD', data: 'ref: refs/heads/main\n' },
+        { name: 'p/.git/refs/heads', data: 'not a folder' },
+        { name: 'p/.git/objects/ab/' + 'c'.repeat(38), data: 'x' },
+      ]),
+      dest,
+      historyLimits,
+    );
+    expect(r).toMatchObject({ files: 1, history: false, warnings: [expect.stringMatching(/unexpected layout/)] });
+    expect(list(dest)).toEqual(['src/a.ts']);
+  });
+
   it('drops nested .git folders (submodules, vendored checkouts)', async () => {
     const dest = tmp();
     const r = await extractZip(zip([{ name: 'p/src/a.ts', data: 'x' }, { name: 'p/lib/sub/.git/HEAD', data: 'ref: refs/heads/main\n' }]), dest, historyLimits);

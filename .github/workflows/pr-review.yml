@@ -3,23 +3,34 @@ name: AI PR review
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:            # "/review" comments on a PR
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
 
-concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
+    # Pushes to a PR, or a "/review" comment on a PR from the repo owner or a member.
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association) &&
+       (github.event.comment.body == '/review' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        startsWith(github.event.comment.body, format('/review{0}', fromJSON('"\r"'))) ||
+        startsWith(github.event.comment.body, format('/review{0}', fromJSON('"\n"')))))
+    # At job level, so comments that don't match don't cancel a review in progress.
+    concurrency:
+      group: pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
       - uses: Rikul/pr-commit-helper@main
         with:
           provider: openai                       # OpenRouter is OpenAI-compatible
           base_url: https://openrouter.ai/api/v1
-          api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          api_key: ${{ secrets.OPENROUTER_API_KEY }}    # Add OPENROUTER_API_KEY as a repo secret
           model: anthropic/claude-haiku-5.5
           effort: high

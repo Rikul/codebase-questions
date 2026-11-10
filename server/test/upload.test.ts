@@ -109,11 +109,18 @@ describe('ZIP extraction', () => {
     expect(r.warnings.join(' ')).toMatch(/MAX_FILE_BYTES/);
   });
 
-  it('refuses archives over the size or file limits before writing anything', async () => {
+  it('refuses archives over the size limit before writing anything', async () => {
     const dest = tmp();
     await expect(extractZip(zip([{ name: 'a.ts', data: 'x', declaredSize: 50_000 }, { name: 'b.ts', data: 'y', declaredSize: 50_000 }]), dest, { ...limits, maxBytes: 60_000 })).rejects.toThrow(/MAX_REPO_MB/);
-    await expect(extractZip(zip([{ name: 'a.ts', data: 'x' }, { name: 'b.ts', data: 'y' }]), dest, { ...limits, maxFiles: 1 })).rejects.toThrow(/MAX_REPO_FILES/);
     expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('keeps the first MAX_REPO_FILES files of a larger upload, like a clone', async () => {
+    const dest = tmp();
+    const capped = await extractZip(zip([{ name: 'b.ts', data: 'y' }, { name: 'a.ts', data: 'x' }]), dest, { ...limits, maxFiles: 1 });
+    expect(capped.files).toBe(1);
+    expect(capped.warnings.join(' ')).toMatch(/only the first 1 \(MAX_REPO_FILES\)/);
+    expect(fs.readdirSync(dest)).toEqual(['a.ts']);
   });
 
   it('does not inflate past the declared size', async () => {

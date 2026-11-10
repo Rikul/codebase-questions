@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { openDb } from '../src/db/index.js';
+import { backfillCommitStats, openDb } from '../src/db/index.js';
 import { classifyCommits } from '../src/history/classify.js';
-import { backfillCommitStats, listCommits, repoStats } from '../src/history/commits.js';
+import { listCommits, repoStats } from '../src/history/commits.js';
 import { indexHistory } from '../src/history/index.js';
 import { commitTypeOf } from '../src/history/types.js';
 import { prepareCheckout } from '../src/ingest/clone.js';
@@ -128,10 +128,19 @@ describe('commit stats, filters and classification', () => {
     expect(sent).toEqual([]);
   });
 
-  it('fills stats for commits indexed before they existed', () => {
+  it('fills stats for commits indexed before they existed (once, not on every read)', () => {
     db.prepare('UPDATE commits SET added=NULL, deleted=NULL, files=NULL, type=NULL, type_source=NULL WHERE repo_id=?').run(id);
-    backfillCommitStats(db, id);
+    listCommits(db, id);
+    expect(db.prepare(`SELECT added FROM commits WHERE repo_id=? AND subject='feat: add search'`).get(id)).toEqual({ added: null });
+    backfillCommitStats(db); // what opening the database runs
     expect(db.prepare(`SELECT type, added FROM commits WHERE repo_id=? AND subject='feat: add search'`).get(id)).toEqual({ type: 'feat', added: 60 });
+  });
+
+  it('describes the size buckets list_commits accepts from SIZE_BUCKETS', () => {
+    const tool = repoTools(new RepoIndex(db, id)).find((t) => t.name === 'list_commits')!;
+    expect(tool.description).toContain('XS <10, S <50, M <250, L <1000, XL 1000+');
+    expect(tool.schema.safeParse({ sizes: ['XL'] }).success).toBe(true);
+    expect(tool.schema.safeParse({ sizes: ['XXL'] }).success).toBe(false);
   });
 
   it('exposes the commit list to the agent as list_commits', async () => {

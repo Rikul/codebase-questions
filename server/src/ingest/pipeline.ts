@@ -217,7 +217,6 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
   }
 }
 
-/** Run static ingestion + LLM analysis over a checked-out directory and persist everything. */
 /**
  * Run `finish` once the background review settles. If `finish` throws, `recover` runs so the
  * repo and job still end in a final status; a failure in `recover` itself is only logged.
@@ -235,6 +234,7 @@ export async function settleAfterReview(review: Promise<void>, finish: () => voi
   }
 }
 
+/** Run static ingestion + LLM analysis over a checked-out directory and persist everything. */
 export async function analyzeDirectory(
   db: DB,
   llm: LLMProvider,
@@ -397,10 +397,9 @@ export async function analyzeDirectory(
   const review = (async () => {
     let steps = 0;
     try {
-      // Registered like a user-started review, so the Review tab can follow it live. Users cannot
-      // start a review while analysis runs (the API refuses), so this is never a stale earlier run.
-      // A full review can only be live here if it started before this analysis (the API refuses both
-      // orders now); let it finish, then review the freshly analyzed code rather than adopting it.
+      // Registered like a user-started review, so the Review tab can follow it live. If a full review
+      // is still running (startReview would hand that run back instead of starting one), wait for it
+      // to finish so this review covers the code just analyzed, not the version that run started from.
       await waitForReview(repoId, null);
       const run = startReview(db, llm, embeddings, repoId, null, (w) => warn(`Code review: ${w}`));
       run.listeners.add((e) => {

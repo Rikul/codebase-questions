@@ -58,9 +58,11 @@ export async function writeEntries(entries: UploadEntry[], dest: string, limits:
     .map((e) => ({ ...e, rel: root ? e.rel.slice(root.length + 1) : e.rel }))
     .filter((e) => !isIgnoredPath(e.rel));
   const big = kept.filter((e) => e.size > limits.maxFileBytes);
-  const files = kept.filter((e) => e.size <= limits.maxFileBytes);
-  if (!files.length) throw new Error('The upload contains no source files to analyze.');
-  if (files.length > limits.maxFiles) throw new Error(`The upload has ${files.length} files to analyze, over the limit of ${limits.maxFiles} (MAX_REPO_FILES).`);
+  const small = kept.filter((e) => e.size <= limits.maxFileBytes);
+  if (!small.length) throw new Error('The upload contains no source files to analyze.');
+  // Like a clone, an upload over MAX_REPO_FILES is analyzed in part: the first files by path are kept.
+  const files = small.length > limits.maxFiles ? [...small].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)).slice(0, limits.maxFiles) : small;
+  if (files.length < small.length) warnings.push(`The upload has ${small.length} files to analyze; only the first ${files.length} (MAX_REPO_FILES) were kept.`);
   const total = files.reduce((n, e) => n + e.size, 0);
   if (total > limits.maxBytes) throw new Error(`The upload is ${(total / 1024 / 1024).toFixed(0)} MB of source, over the limit of ${(limits.maxBytes / 1024 / 1024).toFixed(0)} MB (MAX_REPO_MB).`);
 

@@ -73,6 +73,20 @@ describe('analysis pipeline (offline provider)', () => {
     expect(events.filter((e) => e.type === 'token').length).toBeGreaterThan(0);
   });
 
+  it('keeps a partial answer when the asker stops reading (Stop, closed tab)', async () => {
+    let conversationId = 0;
+    let tokens = 0;
+    for await (const ev of answerQuestion(db, llm, null, repoId, { question: 'How is the API structured?' })) {
+      if (ev.type === 'meta') conversationId = ev.conversationId;
+      if (ev.type === 'token' && ++tokens === 2) break;
+    }
+    expect(tokens).toBe(2);
+    const msgs = db.prepare('SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id').all(conversationId) as { role: string; content: string }[];
+    expect(msgs.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(msgs[1].content).toMatch(/Stopped before the answer finished/);
+    db.prepare('DELETE FROM conversations WHERE id=?').run(conversationId); // later tests count conversations
+  });
+
   it('writes the full codebase review in the background step', () => {
     const full = getReview(db, repoId, null);
     expect(full?.review.summaryMd).toMatch(/Static review/);

@@ -60,9 +60,9 @@ export function isIgnoredPath(rel: string): boolean {
 }
 
 export function scanRepo(root: string, opts: ScanOptions): ScannedFile[] {
-  const ig = ignore().add(DEFAULT_IGNORES);
   const gi = path.join(root, '.gitignore');
-  if (fs.existsSync(gi)) ig.add(fs.readFileSync(gi, 'utf8'));
+  // The repo's .gitignore adds to the defaults, so it needs its own instance.
+  const ig = fs.existsSync(gi) ? ignore().add(DEFAULT_IGNORES).add(fs.readFileSync(gi, 'utf8')) : defaultIgnore;
 
   const out: ScannedFile[] = [];
   const stack: string[] = [''];

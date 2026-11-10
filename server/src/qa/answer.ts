@@ -216,15 +216,26 @@ export async function* answerQuestion(
       queue.push({ type: 'token', text: msg });
     })
     .finally(() => queue.close());
-  for await (const ev of queue) yield ev;
-  await run;
-  const known = new Set((db.prepare('SELECT path FROM files WHERE repo_id=?').all(repoId) as { path: string }[]).map((r) => r.path));
-  let citations = extractCitations(full, known);
-  if (!citations.length) citations = sources.slice(0, 6);
-  const messageId = Number(
-    db.prepare('INSERT INTO messages (conversation_id, role, content, category, citations) VALUES (?, ?, ?, ?, ?)').run(conversationId, 'assistant', full, category, JSON.stringify(citations)).lastInsertRowid,
-  );
-  yield { type: 'done', messageId, citations };
+  let saved = false;
+  const persist = (text: string) => {
+    saved = true;
+    const known = new Set((db.prepare('SELECT path FROM files WHERE repo_id=?').all(repoId) as { path: string }[]).map((r) => r.path));
+    let citations = extractCitations(text, known);
+    if (!citations.length) citations = sources.slice(0, 6);
+    const messageId = Number(
+      db.prepare('INSERT INTO messages (conversation_id, role, content, category, citations) VALUES (?, ?, ?, ?, ?)').run(conversationId, 'assistant', text, category, JSON.stringify(citations)).lastInsertRowid,
+    );
+    return { messageId, citations };
+  };
+  try {
+    for await (const ev of queue) yield ev;
+    await run;
+    yield { type: 'done', ...persist(full) };
+  } finally {
+    // The caller stopped reading (Stop, or the client disconnected): keep what was written so the
+    // conversation still has an answer to the question, marked as incomplete.
+    if (!saved) persist(full.trim() ? `${full}\n\n_(Stopped before the answer finished.)_` : '_(Stopped before an answer was written.)_');
+  }
 }
 
 const HISTORY_Q = /\b(when (was|were|did)|who (wrote|added|created|changed)|introduced|history|first (added|appeared)|created|last changed|blame)\b/i;

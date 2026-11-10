@@ -39,7 +39,7 @@ If history is truncated (shallow clone), creation dates are shown as "on or befo
 
 ### Upload a ZIP or folder
 
-No Git URL? On the home page, **Upload ZIP** takes a `.zip` (a GitHub *Download ZIP* works; its top-level folder is stripped), and **Upload folder** picks a folder from your computer. Folder uploads leave out `node_modules`, build output, binaries and whatever the folder's root `.gitignore` excludes before anything is sent. Uploads have no git history: any `.git` folder is dropped, because its config can make git run commands. Re-analyze rebuilds from the uploaded files. Size is limited by `MAX_UPLOAD_MB` (request size) and `MAX_REPO_MB` / `MAX_REPO_FILES` (extracted source).
+No Git URL? On the home page, **Upload ZIP** takes a `.zip` (a GitHub *Download ZIP* works; its top-level folder is stripped), and **Upload folder** picks a folder from your computer. Folder uploads leave out `node_modules`, build output, binaries and whatever the folder's root `.gitignore` excludes before anything is sent. Uploads have no git history: any `.git` folder is dropped, because its config can make git run commands. Re-analyze rebuilds from the uploaded files. Size is limited by `MAX_UPLOAD_MB` (request size) and `MAX_REPO_MB` (extracted source); as with a clone, only the first `MAX_REPO_FILES` files are analyzed.
 
 ### Repository tab
 

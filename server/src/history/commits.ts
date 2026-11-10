@@ -2,21 +2,6 @@ import type { CommitList, CommitListItem, CommitType, RepoStats, SizeBucket } fr
 import { COMMIT_TYPES, SIZE_BUCKETS } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { historyAvailable, historyMeta } from './index.js';
-import { commitTypeOf } from './types.js';
-
-/** Fill stats and types for commits indexed by older versions (idempotent; cheap when nothing is missing). */
-export function backfillCommitStats(db: DB, repoId: string) {
-  const missing = db.prepare('SELECT sha, subject FROM commits WHERE repo_id=? AND (type IS NULL OR added IS NULL)').all(repoId) as { sha: string; subject: string }[];
-  if (!missing.length) return;
-  const sums = db.prepare('SELECT coalesce(sum(added),0) AS a, coalesce(sum(deleted),0) AS d, count(*) AS n FROM file_commits WHERE repo_id=? AND sha=?');
-  const upd = db.prepare(`UPDATE commits SET added=?, deleted=?, files=?, type=coalesce(type, ?), type_source=coalesce(type_source, 'rule') WHERE repo_id=? AND sha=?`);
-  db.transaction(() => {
-    for (const c of missing) {
-      const s = sums.get(repoId, c.sha) as { a: number; d: number; n: number };
-      upd.run(s.a, s.d, s.n, commitTypeOf(c.subject), repoId, c.sha);
-    }
-  })();
-}
 
 export interface CommitFilter {
   types?: CommitType[];
@@ -68,7 +53,6 @@ const row = (r: any): CommitListItem => ({ sha: r.sha, author: r.author, date: r
 
 /** Commits matching the filter, newest first. */
 export function listCommits(db: DB, repoId: string, f: CommitFilter = {}): CommitList {
-  backfillCommitStats(db, repoId);
   const w = where(repoId, f);
   const total = (db.prepare(`SELECT count(*) AS n FROM commits c WHERE ${w.sql}`).get(...w.args) as { n: number }).n;
   const limit = Math.max(1, Math.min(200, f.limit ?? 50));
@@ -86,7 +70,6 @@ export function repoStats(db: DB, repoId: string): RepoStats {
     .prepare(`SELECT lang, count(*) AS files, coalesce(sum(lines),0) AS lines FROM files WHERE repo_id=? AND lang IS NOT NULL GROUP BY lang ORDER BY lines DESC LIMIT 12`)
     .all(repoId) as { lang: string; files: number; lines: number }[]);
   if (!historyAvailable(db, repoId)) return { ...totals, languages, history: null };
-  backfillCommitStats(db, repoId);
   const meta = historyMeta(db, repoId);
   const range = db.prepare('SELECT count(*) AS n, min(date) AS first, max(date) AS last FROM commits WHERE repo_id=?').get(repoId) as { n: number; first: string | null; last: string | null };
   const authors = (db

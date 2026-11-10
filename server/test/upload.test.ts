@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,7 @@ const { runJob } = await import('../src/ingest/pipeline.js');
 const { cleanEntryPath, extractZip } = await import('../src/ingest/upload.js');
 const { MockProvider } = await import('../src/llm/mock.js');
 const { repoDir } = await import('../src/paths.js');
+const { verifyUploadedHistory } = await import('../src/history/git.js');
 
 /** Build a ZIP in memory. Entries may be deflated, stored, symlinks, or lie about their size. */
 function zip(entries: { name: string; data?: string | Buffer; store?: boolean; symlink?: boolean; declaredSize?: number }[]): Buffer {
@@ -192,5 +194,84 @@ describe('upload route', () => {
     expect((await request(app).post('/api/repos/upload').field('paths', '["a.py"]').attach('files', Buffer.from('1'), 'a.py').attach('files', Buffer.from('2'), 'b.py')).status).toBe(400);
     expect((await request(app).post('/api/repos/upload').field('name', 'x')).body.error).toMatch(/Choose a .zip/);
     expect((db.prepare('SELECT count(*) AS n FROM repos').get() as any).n).toBe(0);
+  });
+});
+
+describe('uploaded git history', () => {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'Dev', GIT_AUTHOR_EMAIL: 'd@x', GIT_COMMITTER_NAME: 'Dev', GIT_COMMITTER_EMAIL: 'd@x' };
+  const git = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, env, encoding: 'utf8' });
+  const marker = path.join(os.tmpdir(), `cq-pwned-${process.pid}`);
+
+  /** A project folder with two commits and a hostile .git config and hook. */
+  function project(packed: boolean) {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-gitup-')), 'proj');
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    git(dir, ['init', '-q', '-b', 'main']);
+    fs.writeFileSync(path.join(dir, 'src/app.js'), 'function start() {\n  return 1;\n}\nmodule.exports = { start };\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-q', '-m', 'feat: add app']);
+    fs.appendFileSync(path.join(dir, 'src/app.js'), '// fixed\n');
+    git(dir, ['commit', '-q', '-am', 'fix: tweak app']);
+    if (packed) git(dir, ['gc', '-q']);
+    fs.appendFileSync(path.join(dir, '.git/config'), `[core]\n\tfsmonitor = touch ${marker}\n[diff]\n\texternal = touch ${marker}\n`);
+    fs.writeFileSync(path.join(dir, '.git/hooks/post-checkout'), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, '.git/objects/info/alternates'), '/etc\n');
+    return dir;
+  }
+  const zipDir = (dir: string, drop: (rel: string) => boolean = () => false) =>
+    zip(list(dir).filter((rel) => !drop(rel)).map((rel) => ({ name: `proj/${rel}`, data: fs.readFileSync(path.join(dir, rel)) })));
+  const historyLimits = { ...limits, maxHistoryBytes: 50 * 1024 * 1024 };
+
+  it.each([['loose objects', false], ['packed objects', true]])('keeps the history of a ZIP with its .git folder (%s), without its config or hooks', async (_, packed) => {
+    const db = openDb(':memory:');
+    const app = createApp(db, new MockProvider(), null, new Auth(db, crypto.randomBytes(32)));
+    const res = await request(app).post('/api/repos/upload').attach('file', zipDir(project(packed as boolean)), 'proj.zip');
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    const { repoId, jobId } = res.body;
+    const dir = repoDir(repoId);
+    expect(fs.readFileSync(path.join(dir, '.git/config'), 'utf8')).not.toMatch(/fsmonitor|external/);
+    expect(fs.existsSync(path.join(dir, '.git/hooks'))).toBe(false);
+    expect(fs.existsSync(path.join(dir, '.git/objects/info/alternates'))).toBe(false);
+
+    await runJob(db, new MockProvider(), null, jobId, repoId);
+    await vi.waitFor(() => expect(db.prepare('SELECT status FROM repos WHERE id=?').get(repoId)).toMatchObject({ status: 'ready' }));
+    const commits = db.prepare('SELECT subject, type FROM commits WHERE repo_id=? ORDER BY seq').all(repoId);
+    expect(commits).toEqual([{ subject: 'fix: tweak app', type: 'fix' }, { subject: 'feat: add app', type: 'feat' }]);
+    expect((db.prepare(`SELECT count(*) AS n FROM file_commits WHERE repo_id=? AND path='src/app.js'`).get(repoId) as any).n).toBe(2);
+    expect(fs.existsSync(marker)).toBe(false);
+    // The scanner never indexes .git.
+    expect((db.prepare(`SELECT count(*) AS n FROM files WHERE repo_id=? AND path LIKE '.git/%'`).get(repoId) as any).n).toBe(0);
+  });
+
+  it('drops the history when objects are missing, and analysis carries on', async () => {
+    const src = project(false);
+    const blob = git(src, ['rev-parse', 'HEAD:src/app.js']).trim();
+    const dest = tmp();
+    const r = await extractZip(zipDir(src, (rel) => rel === `.git/objects/${blob.slice(0, 2)}/${blob.slice(2)}`), dest, historyLimits);
+    expect(r.history).toBe(true);
+    const v = await verifyUploadedHistory(dest);
+    expect(v).toMatchObject({ history: null, warning: expect.stringMatching(/incomplete or unreadable/) });
+    expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
+    expect(list(dest)).toEqual(['src/app.js']);
+  });
+
+  it('does not keep history over MAX_HISTORY_MB, with HISTORY_DEPTH=-1, or with a bad HEAD', async () => {
+    const src = project(true);
+    const over = await extractZip(zipDir(src), tmp(), { ...limits, maxHistoryBytes: 10 });
+    expect(over).toMatchObject({ history: false, warnings: [expect.stringMatching(/MAX_HISTORY_MB/)] });
+    const off = await extractZip(zipDir(src), tmp(), limits);
+    expect(off).toMatchObject({ history: false, warnings: [] });
+    fs.writeFileSync(path.join(src, '.git/HEAD'), 'ref: ../../../etc/passwd\n');
+    const dest = tmp();
+    const bad = await extractZip(zipDir(src), dest, historyLimits);
+    expect(bad).toMatchObject({ history: false, warnings: [expect.stringMatching(/unexpected HEAD/)] });
+    expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
+  });
+
+  it('drops nested .git folders (submodules, vendored checkouts)', async () => {
+    const dest = tmp();
+    const r = await extractZip(zip([{ name: 'p/src/a.ts', data: 'x' }, { name: 'p/lib/sub/.git/HEAD', data: 'ref: refs/heads/main\n' }]), dest, historyLimits);
+    expect(r.history).toBe(false);
+    expect(list(dest)).toEqual(['src/a.ts']);
   });
 });

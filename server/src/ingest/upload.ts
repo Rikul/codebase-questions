@@ -2,12 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import zlib from 'node:zlib';
+import { isUploadGitPath } from '@cq/shared';
 import { isIgnoredPath } from './scan.js';
 
 // Turns an uploaded ZIP archive or browser folder upload into a source tree under `dest`.
 // Nothing from the upload is executed. Entry paths are validated so nothing is written outside
-// `dest`; symlinks are skipped; `.git` directories are dropped (their config can make git run
-// commands), so uploads have no history; paths the scanner ignores are not written at all.
+// `dest`; symlinks are skipped; paths the scanner ignores are not written at all. Of the project's
+// top-level `.git` folder only HEAD, refs and objects are kept (isUploadGitPath), next to a config
+// written here, so git can read the history but nothing uploaded can make it run commands.
+// Nested `.git` folders (submodules, vendored checkouts) are dropped.
 
 const inflateRaw = promisify(zlib.inflateRaw);
 
@@ -17,6 +20,8 @@ export interface UploadLimits {
   maxFiles: number;
   /** Larger files are skipped (the scanner would skip them anyway). */
   maxFileBytes: number;
+  /** Max total size of the kept `.git` history; 0 or unset drops it (no history). */
+  maxHistoryBytes?: number;
 }
 
 export interface UploadResult {
@@ -24,6 +29,8 @@ export interface UploadResult {
   bytes: number;
   /** The single top-level folder that was stripped (e.g. `repo-main` from a GitHub ZIP), if any. */
   root: string | null;
+  /** Whether the upload's git history was kept (under `dest/.git`). */
+  history: boolean;
   warnings: string[];
 }
 
@@ -33,32 +40,68 @@ export interface UploadEntry {
   read: () => Promise<Buffer>;
 }
 
-/** Normalize an entry path to a relative posix path, or null if it is unsafe or not wanted. */
-export function cleanEntryPath(raw: string): string | null {
+/** Normalize an entry path to a relative posix path, or null if it is unsafe or OS metadata. */
+function normalizeEntryPath(raw: string): string | null {
   if (raw.includes('\0')) return null;
   const p = raw.replace(/\\/g, '/');
   if (p.startsWith('/') || /^[a-zA-Z]:/.test(p)) return null;
   const parts = p.split('/').filter((s) => s && s !== '.');
   if (!parts.length || parts.includes('..')) return null;
-  if (parts.some((s) => s === '.git' || s === '__MACOSX') || parts.at(-1) === '.DS_Store') return null;
+  if (parts.includes('__MACOSX') || parts.at(-1) === '.DS_Store') return null;
   return parts.join('/');
+}
+
+/** Normalize a source entry path, or null if it is unsafe, OS metadata or inside a `.git` folder. */
+export function cleanEntryPath(raw: string): string | null {
+  const p = normalizeEntryPath(raw);
+  return p && !p.split('/').includes('.git') ? p : null;
+}
+
+// The only git config an uploaded history gets: no hooks, filters, drivers or remotes.
+const UPLOAD_GIT_CONFIG = '[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n';
+const HEAD_RE = /^(ref: refs\/heads\/[\w.\-/]+|[0-9a-f]{40})\n?$/;
+
+type Entry = UploadEntry & { rel: string };
+
+/** Write one entry under `base` ('wx': never follow or replace anything; no executable bits). */
+async function writeEntry(base: string, rel: string, e: UploadEntry, maxBytes: number): Promise<number | null> {
+  const target = path.resolve(base, rel);
+  if (!target.startsWith(base + path.sep)) return null;
+  try {
+    const data = await e.read();
+    // Sizes were checked against declared sizes; never write more than an entry declared.
+    if (data.length > e.size || data.length > maxBytes) return null;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, data, { flag: 'wx', mode: 0o644 });
+    return data.length;
+  } catch {
+    return null;
+  }
 }
 
 /** Write validated entries under `dest` (which must not exist yet). */
 export async function writeEntries(entries: UploadEntry[], dest: string, limits: UploadLimits, warnings: string[] = []): Promise<UploadResult> {
-  const cleaned = entries.flatMap((e) => {
-    const rel = cleanEntryPath(e.path);
+  const normalized = entries.flatMap((e) => {
+    const rel = normalizeEntryPath(e.path);
     return rel ? [{ ...e, rel }] : [];
   });
-  const skippedUnsafe = entries.length - cleaned.length;
+  let skippedUnsafe = entries.length - normalized.length;
   // Strip one shared top-level folder (`repo-main/` in a GitHub ZIP, the folder name in a folder upload).
-  const first = cleaned[0]?.rel.split('/')[0];
-  const root = first && cleaned.length && cleaned.every((e) => e.rel.startsWith(`${first}/`)) ? first : null;
-  const kept = cleaned
-    .map((e) => ({ ...e, rel: root ? e.rel.slice(root.length + 1) : e.rel }))
-    .filter((e) => !isIgnoredPath(e.rel));
-  const big = kept.filter((e) => e.size > limits.maxFileBytes);
-  const small = kept.filter((e) => e.size <= limits.maxFileBytes);
+  const first = normalized[0]?.rel.split('/')[0];
+  const root = first && normalized.length && normalized.every((e) => e.rel.startsWith(`${first}/`)) ? first : null;
+  const source: Entry[] = [];
+  let gitEntries: Entry[] = [];
+  for (const e of normalized) {
+    const rel = root ? e.rel.slice(root.length + 1) : e.rel;
+    if (rel.startsWith('.git/')) {
+      const inner = rel.slice('.git/'.length);
+      if (isUploadGitPath(inner)) gitEntries.push({ ...e, rel: inner });
+    } else if (rel.split('/').includes('.git')) skippedUnsafe++;
+    else if (!isIgnoredPath(rel)) source.push({ ...e, rel });
+  }
+
+  const big = source.filter((e) => e.size > limits.maxFileBytes);
+  const small = source.filter((e) => e.size <= limits.maxFileBytes);
   if (!small.length) throw new Error('The upload contains no source files to analyze.');
   // Like a clone, an upload over MAX_REPO_FILES is analyzed in part: the first files by path are kept.
   const files = small.length > limits.maxFiles ? [...small].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)).slice(0, limits.maxFiles) : small;
@@ -66,35 +109,59 @@ export async function writeEntries(entries: UploadEntry[], dest: string, limits:
   const total = files.reduce((n, e) => n + e.size, 0);
   if (total > limits.maxBytes) throw new Error(`The upload is ${(total / 1024 / 1024).toFixed(0)} MB of source, over the limit of ${(limits.maxBytes / 1024 / 1024).toFixed(0)} MB (MAX_REPO_MB).`);
 
+  const maxHistory = limits.maxHistoryBytes ?? 0;
+  if (gitEntries.length) {
+    const gitTotal = gitEntries.reduce((n, e) => n + e.size, 0);
+    if (maxHistory <= 0) gitEntries = [];
+    else if (gitTotal > maxHistory) {
+      warnings.push(`The uploaded git history is ${(gitTotal / 1024 / 1024).toFixed(0)} MB (over MAX_HISTORY_MB=${(maxHistory / 1024 / 1024).toFixed(0)}); continuing without history.`);
+      gitEntries = [];
+    } else if (!gitEntries.some((e) => e.rel === 'HEAD') || !gitEntries.some((e) => e.rel.startsWith('objects/'))) {
+      warnings.push('The uploaded .git folder is incomplete (no HEAD or no objects); continuing without history.');
+      gitEntries = [];
+    }
+  }
+
   const base = path.resolve(dest);
   fs.mkdirSync(base, { recursive: true });
   let written = 0;
   let bytes = 0;
   let failed = 0;
   for (const e of files) {
-    const target = path.resolve(base, e.rel);
-    if (!target.startsWith(base + path.sep)) continue;
-    try {
-      const data = await e.read();
-      // MAX_REPO_MB was checked against declared sizes; never write more than an entry declared.
-      if (data.length > e.size || data.length > limits.maxFileBytes) {
-        failed++;
-        continue;
-      }
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      // 'wx' refuses to follow or replace anything already there; no executable bits.
-      fs.writeFileSync(target, data, { flag: 'wx', mode: 0o644 });
+    const n = await writeEntry(base, e.rel, e, limits.maxFileBytes);
+    if (n === null) failed++;
+    else {
       written++;
-      bytes += data.length;
-    } catch {
-      failed++;
+      bytes += n;
     }
   }
-  if (skippedUnsafe) warnings.push(`Skipped ${skippedUnsafe} entr${skippedUnsafe === 1 ? 'y' : 'ies'} (.git, unsafe paths or OS metadata).`);
+  if (skippedUnsafe) warnings.push(`Skipped ${skippedUnsafe} entr${skippedUnsafe === 1 ? 'y' : 'ies'} (nested .git folders, unsafe paths or OS metadata).`);
   if (big.length) warnings.push(`Skipped ${big.length} file(s) over MAX_FILE_BYTES.`);
   if (failed) warnings.push(`Could not write ${failed} file(s) (duplicate or conflicting paths, or unreadable data).`);
   if (!written) throw new Error('None of the uploaded files could be read.');
-  return { files: written, bytes, root, warnings };
+
+  const history = gitEntries.length ? await writeGitHistory(base, gitEntries, maxHistory, warnings) : false;
+  return { files: written, bytes, root, history, warnings };
+}
+
+/** Write the kept `.git` entries and a fixed config; on any problem, drop the history entirely. */
+async function writeGitHistory(base: string, entries: Entry[], maxBytes: number, warnings: string[]): Promise<boolean> {
+  const gitDir = path.join(base, '.git');
+  const drop = (why: string) => {
+    fs.rmSync(gitDir, { recursive: true, force: true });
+    warnings.push(`The uploaded git history ${why}; continuing without history.`);
+    return false;
+  };
+  const head = entries.find((e) => e.rel === 'HEAD')!;
+  const headText = (await head.read().catch(() => Buffer.alloc(0))).toString('utf8');
+  if (!HEAD_RE.test(headText)) return drop('has an unexpected HEAD');
+  for (const e of entries) {
+    if ((await writeEntry(gitDir, e.rel, e, maxBytes)) === null) return drop('could not be written (duplicate or unreadable entries)');
+  }
+  // git only treats the folder as a repository with these present (a packed history may lack them).
+  for (const d of ['refs/heads', 'refs/tags', 'objects/pack', 'objects/info']) fs.mkdirSync(path.join(gitDir, d), { recursive: true });
+  fs.writeFileSync(path.join(gitDir, 'config'), UPLOAD_GIT_CONFIG, { flag: 'wx', mode: 0o644 });
+  return true;
 }
 
 // ---------- ZIP reading (central directory; stored and deflate entries) ----------

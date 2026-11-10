@@ -22,6 +22,7 @@ import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
 import type { FileFacts } from './parse.js';
 import { buildRefs } from './refs.js';
 import type { HistoryInfo } from '../history/git.js';
+import { verifyUploadedHistory } from '../history/git.js';
 import { indexHistory, repoHistorySummary, storeFileHistorySummaries, llmCommitTypes } from '../history/index.js';
 import { classifyCommits } from '../history/classify.js';
 import { listCommits, repoStats } from '../history/commits.js';
@@ -63,7 +64,7 @@ export function createRepo(db: DB, input: string): { repoId: string; jobId: stri
 
 /**
  * Create a repository from an uploaded ZIP or folder: `fill` writes the source tree into the new
- * checkout directory, then analysis is queued. Uploads have no remote and no git history.
+ * checkout directory, then analysis is queued. Uploads have no remote; they have history if they included `.git`.
  */
 export async function createUploadRepo(
   db: DB,
@@ -167,6 +168,10 @@ async function executeJob(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       // Uploaded source is analyzed where it was extracted; there is nothing to fetch.
       if (!fs.existsSync(dir)) throw new Error('The uploaded files are missing on the server; upload the project again.');
       emit('clone', `Using uploaded files (${repo.url.slice(UPLOAD_URL_PREFIX.length)})`, analysisProgress('clone'));
+      // A history that came with the upload is checked on every analysis (it is kept for re-analysis).
+      const uploaded = await verifyUploadedHistory(dir);
+      history = uploaded.history;
+      if (uploaded.warning) warnings.push(uploaded.warning);
     } else {
       // Re-analysis fetches into the existing checkout when there is one; otherwise it clones.
       const hasCheckout = fs.existsSync(path.join(dir, '.git'));

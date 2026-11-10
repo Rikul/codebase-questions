@@ -80,7 +80,7 @@ export function RepositoryView() {
           ) : (
             <div className="card insight">
               {isUploadUrl(repo.url)
-                ? <>This project was uploaded as a ZIP or folder, which carries no git history (any <code>.git</code> folder is left out), so there is no commit list. Add it by Git URL to explore its history.</>
+                ? <>This project was uploaded without git history, so there is no commit list. Upload it again with its <code>.git</code> folder included (a GitHub "Download ZIP" has none), or add it by Git URL.</>
                 : <>No git history is available for this repository, so there is no commit list. Set <code>HISTORY_DEPTH</code> to 0 (full history) or a commit count, then re-analyze.</>}
             </div>
           ))}

@@ -150,7 +150,13 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       });
     },
     async (req, res) => {
-      const limits = { maxBytes: config.ingest.maxRepoMb * 1024 * 1024, maxFiles: config.ingest.maxRepoFiles, maxFileBytes: config.ingest.maxFileBytes };
+      const limits = {
+        maxBytes: config.ingest.maxRepoMb * 1024 * 1024,
+        maxFiles: config.ingest.maxRepoFiles,
+        maxFileBytes: config.ingest.maxFileBytes,
+        // HISTORY_DEPTH=-1 turns history off for uploads too.
+        maxHistoryBytes: config.ingest.historyDepth < 0 ? 0 : config.ingest.maxHistoryMb * 1024 * 1024,
+      };
       const parts = (req.files ?? {}) as Record<string, Express.Multer.File[] | undefined>;
       const named = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
       try {

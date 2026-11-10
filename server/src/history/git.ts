@@ -81,6 +81,11 @@ export async function finalizeHistory(dir: string, cleanUrl: string, depth: numb
       if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(secret)) throw new Error('Could not scrub credentials from the cloned repository');
     }
   }
+  return readHistoryInfo(dir, depth);
+}
+
+/** Shallow boundaries or the root commit of a checkout's history. */
+async function readHistoryInfo(dir: string, depth: number): Promise<HistoryInfo> {
   const shallow = (await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true';
   let boundaries: string[] = [];
   let rootSha: string | null;
@@ -92,4 +97,23 @@ export async function finalizeHistory(dir: string, cleanUrl: string, depth: numb
     rootSha = (await git(dir, ['rev-list', '--max-parents=0', 'HEAD'])).trim().split('\n').filter(Boolean)[0] ?? null;
   }
   return { shallow, rootSha, boundaries, depth };
+}
+
+/**
+ * Check the git history that came with an upload (HEAD, refs and objects; see upload.ts) before
+ * it is used: HEAD must be a commit and everything reachable from it must be present. On any
+ * problem the history is dropped and a warning returned; analysis continues without it.
+ */
+export async function verifyUploadedHistory(dir: string): Promise<{ history: HistoryInfo | null; warning?: string }> {
+  const gitDir = path.join(dir, '.git');
+  if (!fs.existsSync(gitDir)) return { history: null };
+  try {
+    await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    // Walks every reachable commit, tree and blob: fails on a missing or corrupt object.
+    await git(dir, ['rev-list', '--objects', '--count', 'HEAD'], { timeoutMs: 120_000 });
+    return { history: await readHistoryInfo(dir, 0) };
+  } catch {
+    fs.rmSync(gitDir, { recursive: true, force: true });
+    return { history: null, warning: 'The uploaded git history is incomplete or unreadable; continuing without history.' };
+  }
 }

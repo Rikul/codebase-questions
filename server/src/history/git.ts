@@ -101,14 +101,18 @@ async function readHistoryInfo(dir: string, depth: number): Promise<HistoryInfo>
 
 /**
  * Check the git history that came with an upload (HEAD, refs and objects; see upload.ts) before
- * it is used: HEAD must be a commit and everything reachable from it must be present. On any
- * problem the history is dropped and a warning returned; analysis continues without it.
+ * it is used: HEAD must be a commit and everything reachable from it must be present. If git
+ * rejects it, it is deleted; if git cannot run, it is kept. Either way a warning is returned and
+ * analysis continues without history.
  */
 export async function verifyUploadedHistory(dir: string, limits: { depth: number; maxMb: number }): Promise<{ history: HistoryInfo | null; warning?: string }> {
   const gitDir = path.join(dir, '.git');
   if (!fs.existsSync(gitDir)) return { history: null };
-  // The current HISTORY_DEPTH / MAX_HISTORY_MB apply on every analysis. The history is skipped,
-  // not deleted: unlike a clone's, it cannot be fetched again if the limits are raised later.
+  // HISTORY_DEPTH=-1 and MAX_HISTORY_MB apply on every analysis. The history is skipped, not
+  // deleted: unlike a clone's, it cannot be fetched again if the limits are raised later. A
+  // positive HISTORY_DEPTH is how much a clone fetches; an upload keeps the history it brought
+  // (recorded as depth 0, its own shallow boundaries included), and indexing is capped separately
+  // by HISTORY_INDEX_COMMITS.
   if (limits.depth < 0) return { history: null };
   const mb = dirSizeMb(gitDir);
   if (mb > limits.maxMb) return { history: null, warning: `The uploaded git history is ${mb.toFixed(0)} MB (over MAX_HISTORY_MB=${limits.maxMb}); continuing without history.` };

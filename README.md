@@ -39,7 +39,7 @@ If history is truncated (shallow clone), creation dates are shown as "on or befo
 
 ### Upload a ZIP or folder
 
-No Git URL? On the home page, **Upload ZIP** takes a `.zip` (a GitHub *Download ZIP* works; its top-level folder is stripped), and **Upload folder** picks a folder from your computer. Folder uploads leave out `node_modules`, build output, binaries and whatever the folder's root `.gitignore` excludes before anything is sent. Include the project's `.git` folder (zip the folder with it, or pick the folder) to get its git history; a GitHub *Download ZIP* has none. Only what git needs to read history is kept (`HEAD`, refs and objects): the uploaded config, hooks and the rest of `.git` are dropped, because they can make git run commands, and the server writes its own minimal config. The history is checked before use and dropped (with a warning) if it is incomplete, over `MAX_HISTORY_MB`, or `HISTORY_DEPTH=-1`; nested `.git` folders (submodules) are always dropped. Re-analyze rebuilds from the uploaded files. Size is limited by `MAX_UPLOAD_MB` (request size) and `MAX_REPO_MB` (extracted source); as with a clone, only the first `MAX_REPO_FILES` files are analyzed.
+No Git URL? On the home page, **Upload ZIP** takes a `.zip` (a GitHub *Download ZIP* works; its top-level folder is stripped), and **Upload folder** picks a folder from your computer. Folder uploads leave out `node_modules`, build output, binaries and whatever the folder's root `.gitignore` excludes before anything is sent. Include the project's `.git` folder (zip the folder with it, or pick the folder) to get its git history; a GitHub *Download ZIP* has none. Only what git needs to read history is kept (`HEAD`, refs and objects): the uploaded config, hooks and the rest of `.git` are dropped, because they can make git run commands, and the server writes its own minimal config. The history is checked before use and dropped (with a warning) if it is incomplete, over `MAX_HISTORY_MB`, or `HISTORY_DEPTH=-1` (a positive `HISTORY_DEPTH` limits cloning only; an upload keeps the history it includes, and timelines index at most `HISTORY_INDEX_COMMITS` commits); nested `.git` folders (submodules) are always dropped. Re-analyze rebuilds from the uploaded files. Size is limited by `MAX_UPLOAD_MB` (request size) and `MAX_REPO_MB` (extracted source); as with a clone, only the first `MAX_REPO_FILES` files are analyzed.
 
 ### Repository tab
 
@@ -116,7 +116,7 @@ All settings are environment variables. See [`.env.example`](.env.example).
 | `MAX_LLM_FILES` | 150 | How many of the most central files get an LLM summary. The rest get static summaries. |
 | `MAX_REPO_MB` / `MAX_REPO_FILES` / `MAX_FILE_BYTES` | 500 / 20000 / 400000 | Ingestion limits (working tree) |
 | `MAX_UPLOAD_MB` | 200 | Largest ZIP or folder upload. |
-| `HISTORY_DEPTH` / `HISTORY_INDEX_COMMITS` / `MAX_HISTORY_MB` | 1000 / 5000 / 500 | Git history kept, commits indexed for timelines, and the size limit for the kept `.git`. Over the limit, history is dropped with a warning. Truncated history is labeled in the UI. |
+| `HISTORY_DEPTH` / `HISTORY_INDEX_COMMITS` / `MAX_HISTORY_MB` | 1000 / 5000 / 500 | Commits of git history cloned (`-1` = none, also for uploads; an upload otherwise keeps the history it includes), commits indexed for timelines, and the size limit for the kept `.git`. Over the limit, history is dropped with a warning. Truncated history is labeled in the UI. |
 | `COOKIE_SECURE`, `TRUST_PROXY` | false | Set both when serving behind an HTTPS reverse proxy. |
 
 ## License

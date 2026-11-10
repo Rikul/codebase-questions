@@ -1,5 +1,5 @@
 import ignore from 'ignore';
-import { DEFAULT_IGNORES } from '@cq/shared';
+import { DEFAULT_IGNORES, isUploadGitPath } from '@cq/shared';
 import { authEvents } from './api';
 
 export interface UploadCreated {
@@ -11,8 +11,9 @@ export interface UploadCreated {
 
 /**
  * Pick the files of a chosen folder worth sending: drops what the server would never analyze
- * (node_modules, .git, build output, binaries, lock files) and whatever the folder's root
- * .gitignore excludes, so large dependency folders are never uploaded.
+ * (node_modules, build output, binaries, lock files) and whatever the folder's root .gitignore
+ * excludes, so large dependency folders are never uploaded. Of the top-level .git folder only what
+ * the server keeps for history is sent (HEAD, refs, objects; see isUploadGitPath).
  */
 export async function folderFiles(list: FileList): Promise<{ files: File[]; paths: string[]; skipped: number }> {
   const all = [...list].map((f) => ({ f, rel: (f.webkitRelativePath || f.name).replace(/\\/g, '/') }));
@@ -23,6 +24,7 @@ export async function folderFiles(list: FileList): Promise<{ files: File[]; path
   if (gitignore) ig.add(await gitignore.f.text());
   const kept = all.filter((x) => {
     const rel = inner(x.rel);
+    if (rel.startsWith('.git/')) return isUploadGitPath(rel.slice('.git/'.length));
     return rel && !ig.ignores(rel);
   });
   return { files: kept.map((x) => x.f), paths: kept.map((x) => x.rel), skipped: all.length - kept.length };

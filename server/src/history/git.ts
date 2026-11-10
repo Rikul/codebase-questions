@@ -81,6 +81,11 @@ export async function finalizeHistory(dir: string, cleanUrl: string, depth: numb
       if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes(secret)) throw new Error('Could not scrub credentials from the cloned repository');
     }
   }
+  return readHistoryInfo(dir, depth);
+}
+
+/** Shallow boundaries or the root commit of a checkout's history. */
+async function readHistoryInfo(dir: string, depth: number): Promise<HistoryInfo> {
   const shallow = (await git(dir, ['rev-parse', '--is-shallow-repository'])).trim() === 'true';
   let boundaries: string[] = [];
   let rootSha: string | null;
@@ -92,4 +97,41 @@ export async function finalizeHistory(dir: string, cleanUrl: string, depth: numb
     rootSha = (await git(dir, ['rev-list', '--max-parents=0', 'HEAD'])).trim().split('\n').filter(Boolean)[0] ?? null;
   }
   return { shallow, rootSha, boundaries, depth };
+}
+
+/**
+ * Check the git history that came with an upload (HEAD, refs and objects; see upload.ts) before
+ * it is used: HEAD must be a commit and everything reachable from it must be present. If git
+ * rejects it, it is deleted; if git cannot run, it is kept. Either way a warning is returned and
+ * analysis continues without history.
+ */
+export async function verifyUploadedHistory(dir: string, limits: { depth: number; maxMb: number }): Promise<{ history: HistoryInfo | null; warning?: string }> {
+  const gitDir = path.join(dir, '.git');
+  if (!fs.existsSync(gitDir)) return { history: null };
+  // HISTORY_DEPTH=-1 and MAX_HISTORY_MB apply on every analysis. The history is skipped, not
+  // deleted: unlike a clone's, it cannot be fetched again if the limits are raised later. A
+  // positive HISTORY_DEPTH is how much a clone fetches; an upload keeps the history it brought
+  // (recorded as depth 0, its own shallow boundaries included), and indexing is capped separately
+  // by HISTORY_INDEX_COMMITS.
+  if (limits.depth < 0) return { history: null };
+  const mb = dirSizeMb(gitDir);
+  if (mb > limits.maxMb) return { history: null, warning: `The uploaded git history is ${mb.toFixed(0)} MB (over MAX_HISTORY_MB=${limits.maxMb}); continuing without history.` };
+  try {
+    await git(dir, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
+    // Walks every reachable commit, tree and blob: fails on a missing or corrupt object.
+    await git(dir, ['rev-list', '--objects', '--count', 'HEAD'], { timeoutMs: 300_000 });
+    return { history: await readHistoryInfo(dir, 0) };
+  } catch (err) {
+    // Only git's own verdict means the history is broken; a timeout or a failure to start git
+    // leaves it in place for the next analysis.
+    if (!gitRejected(err)) return { history: null, warning: 'Could not check the uploaded git history (git timed out or did not run); continuing without history this time.' };
+    fs.rmSync(gitDir, { recursive: true, force: true });
+    return { history: null, warning: 'The uploaded git history is incomplete or unreadable; continuing without history.' };
+  }
+}
+
+/** True when git ran to completion and exited with an error (not killed by a timeout, not a spawn failure). */
+export function gitRejected(err: unknown): boolean {
+  const e = err as { code?: unknown; killed?: boolean; signal?: unknown } | null;
+  return typeof e?.code === 'number' && !e.killed && !e.signal;
 }

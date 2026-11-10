@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import { commitTypeOf } from '../history/types.js';
+import { errorDetails, log } from '../logging/index.js';
 
 export type DB = Database.Database;
 
@@ -242,9 +244,23 @@ CREATE TABLE IF NOT EXISTS sessions (
 export function openDb(file: string): DB {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
+  db.pragma('busy_timeout = 5000');
+  // Incremental auto-vacuum lets compactDb() return freed space in small steps instead of one
+  // blocking VACUUM, and secure_delete zeroes deleted content so it does not linger in free space.
+  // It must be set before the first table is created; older databases are converted once, here at
+  // startup. A failed conversion (locked, or not enough disk for the copy) does not stop the app:
+  // it is retried at the next start, and compactDb() stops when it can free nothing.
+  db.pragma('auto_vacuum = INCREMENTAL');
+  if (db.pragma('auto_vacuum', { simple: true }) !== 2) {
+    try {
+      db.exec('VACUUM');
+    } catch (err) {
+      log('warn', 'db.autovacuum.convert.failed', errorDetails(err));
+    }
+  }
+  db.pragma('secure_delete = ON');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
   db.exec(SCHEMA);
   migrate(db);
   return db;
@@ -276,6 +292,26 @@ function migrate(db: DB) {
   add('commits', 'type_source', 'TEXT');
   // Flows (sequence diagrams) were removed.
   db.exec('DROP TABLE IF EXISTS flows');
+  backfillCommitStats(db);
+}
+
+/**
+ * Fill stats and types for commits indexed by versions that did not record them. The indexer
+ * writes them now, so this runs once when the database is opened (idempotent).
+ */
+export function backfillCommitStats(db: DB, repoId?: string) {
+  const missing = db
+    .prepare(`SELECT repo_id, sha, subject FROM commits WHERE (type IS NULL OR added IS NULL)${repoId ? ' AND repo_id=?' : ''}`)
+    .all(...(repoId ? [repoId] : [])) as { repo_id: string; sha: string; subject: string }[];
+  if (!missing.length) return;
+  const sums = db.prepare('SELECT coalesce(sum(added),0) AS a, coalesce(sum(deleted),0) AS d, count(*) AS n FROM file_commits WHERE repo_id=? AND sha=?');
+  const upd = db.prepare(`UPDATE commits SET added=?, deleted=?, files=?, type=coalesce(type, ?), type_source=coalesce(type_source, 'rule') WHERE repo_id=? AND sha=?`);
+  db.transaction(() => {
+    for (const c of missing) {
+      const s = sums.get(c.repo_id, c.sha) as { a: number; d: number; n: number };
+      upd.run(s.a, s.d, s.n, commitTypeOf(c.subject), c.repo_id, c.sha);
+    }
+  })();
 }
 
 export function json<T>(v: string | null | undefined, fallback: T): T {
@@ -298,14 +334,22 @@ export function clearAnalysis(db: DB, repoId: string) {
 }
 
 /**
- * Shrink the database files after a large delete: VACUUM rebuilds the file without the freed pages
- * (SQLite otherwise keeps them for reuse, deleted bytes included), and the checkpoint truncates the
- * WAL. It blocks other queries while it runs, so call it after responding.
+ * Shrink the database files after a large delete. Freed pages are returned to the filesystem a few
+ * at a time (incremental vacuum), yielding between steps so requests keep being served, then the
+ * WAL is checkpointed and truncated. secure_delete has already zeroed the deleted content.
  */
-export function compactDb(db: DB): { beforeMb: number; afterMb: number } {
+export async function compactDb(db: DB, pagesPerStep = 1000): Promise<{ beforeMb: number; afterMb: number }> {
   const size = () => (db.pragma('page_count', { simple: true }) as number) * (db.pragma('page_size', { simple: true }) as number) / 1024 / 1024;
   const beforeMb = size();
-  db.exec('VACUUM');
+  const free = () => db.pragma('freelist_count', { simple: true }) as number;
+  for (let left = free(); left > 0; ) {
+    db.pragma(`incremental_vacuum(${Math.max(1, Math.floor(pagesPerStep))})`);
+    const now = free();
+    // No progress (e.g. a database not in incremental mode): stop rather than spin.
+    if (now >= left) break;
+    left = now;
+    await new Promise((r) => setImmediate(r));
+  }
   db.pragma('wal_checkpoint(TRUNCATE)');
   return { beforeMb, afterMb: size() };
 }

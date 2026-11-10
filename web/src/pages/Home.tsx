@@ -155,7 +155,7 @@ export function Home() {
               <span className="muted">No Git URL?</span>
               <button type="button" className="btn sm" onClick={() => zipRef.current?.click()} title="Upload the project as a .zip archive (a GitHub 'Download ZIP' works)">Upload ZIP</button>
               <button type="button" className="btn sm" onClick={() => dirRef.current?.click()} title="Upload a project folder from your computer; node_modules, build output and .gitignored files are left out">Upload folder</button>
-              <span className="muted">· uploads have no git history{cfg ? `, up to ${cfg.maxUploadMb} MB` : ''}</span>
+              <span className="muted">· include the <code>.git</code> folder for history{cfg ? `; up to ${cfg.maxUploadMb} MB` : ''}</span>
               <span className="grow" />
               <button type="button" className="btn sm ghost" onClick={() => fileRef.current?.click()} title="Import a project exported as JSON">Import JSON</button>
             </>

@@ -13,9 +13,30 @@ export const DEFAULT_IGNORES = [
   '*.svg', '*.pyc', '*.class', '*.o', '*.a', '*.bin', '*.dat', '*.db', '*.sqlite', '*.pkl', '*.parquet', '*.onnx', '*.pt',
 ];
 
-/** Repositories uploaded as a ZIP or folder have a url like `upload:name.zip`; they have no remote and no git history. */
+/**
+ * Repositories uploaded as a ZIP or folder have a url like `upload:name.zip`. They have no remote;
+ * they have git history when the upload includes the project's top-level `.git` folder.
+ */
 export const UPLOAD_URL_PREFIX = 'upload:';
 export const isUploadUrl = (url: string) => url.startsWith(UPLOAD_URL_PREFIX);
+
+const UPLOAD_GIT_PATHS = [
+  /^(HEAD|packed-refs|shallow)$/,
+  /^refs\/[\w.\-/]+$/,
+  /^objects\/[0-9a-f]{2}\/[0-9a-f]{38}$/,
+  /^objects\/pack\/(pack-[0-9a-f]{40}\.(pack|idx|rev|bitmap)|multi-pack-index)$/,
+  /^objects\/info\/(commit-graph|commit-graphs\/(commit-graph-chain|graph-[0-9a-f]{40}\.graph))$/,
+];
+
+/**
+ * Whether a path inside an uploaded top-level `.git` folder is kept. Only what git needs to read
+ * history is kept: HEAD, refs and objects. Config, hooks, info/ (attributes, grafts), alternates,
+ * worktrees and modules are dropped, because they can make git run commands or read outside the
+ * checkout. The server writes its own minimal config.
+ */
+export function isUploadGitPath(inner: string): boolean {
+  return !inner.split('/').some((s) => s === '..' || s === '.' || !s) && UPLOAD_GIT_PATHS.some((re) => re.test(inner));
+}
 
 export const CATEGORIES = ['architecture', 'onboarding', 'security', 'api', 'repository'] as const;
 export const CategorySchema = z.enum(CATEGORIES);

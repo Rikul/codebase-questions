@@ -1,117 +1,54 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentStep, AskEvent, Category, ChatMessage, Citation } from '@cq/shared';
-import { AgentTrace, upsertStep } from './AgentTrace';
+import { useEffect, useRef, useState } from 'react';
+import type { Category } from '@cq/shared';
+import { AgentTrace } from './AgentTrace';
 import { CATEGORIES } from '@cq/shared';
-import { api, ask } from '../lib/api';
+import { api } from '../lib/api';
+import { useChat } from '../lib/chatStore';
 import { CATEGORY_META } from '../lib/format';
 import type { AskIntent } from '../lib/repoContext';
 import { useRepo } from '../lib/repoContext';
 import { Markdown } from './Markdown';
 
-interface UiMsg {
-  key: string;
-  role: 'user' | 'assistant';
-  content: string;
-  category: Category | null;
-  citations: Citation[];
-  sources?: Citation[];
-  streaming?: boolean;
-  steps?: AgentStep[];
-  notes?: string[];
-}
-
 export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; onIntentConsumed: () => void }) {
   const { repo, openCode } = useRepo();
+  // The conversation and any answer still streaming live in a store, so they survive tab switches.
+  const [{ convId, msgs, input, category, focus, busy, convsVersion }, store] = useChat(repo.id);
   const [convs, setConvs] = useState<{ id: number; title: string }[]>([]);
-  const [convId, setConvId] = useState<number | null>(null);
-  const [msgs, setMsgs] = useState<UiMsg[]>([]);
-  const [input, setInput] = useState('');
-  const [category, setCategory] = useState<Category | null>(null);
-  const [focus, setFocus] = useState<AskIntent['focus'] | null>(null);
-  const [busy, setBusy] = useState(false);
   const [suggested, setSuggested] = useState<{ category: Category; question: string }[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
-  const loadConvs = useCallback(() => api<any[]>(`/repos/${repo.id}/conversations`).then(setConvs).catch(() => undefined), [repo.id]);
   useEffect(() => {
-    loadConvs();
+    api<any[]>(`/repos/${repo.id}/conversations`).then(setConvs).catch(() => undefined);
+  }, [repo.id, convsVersion]);
+  useEffect(() => {
     api<any>(`/repos/${repo.id}/insights`).then((r) => setSuggested(r.questions)).catch(() => undefined);
-  }, [repo.id, loadConvs]);
+  }, [repo.id]);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [msgs]);
 
-  const openConv = async (id: number) => {
-    abortRef.current?.abort();
-    setConvId(id);
-    const m = await api<ChatMessage[]>(`/repos/${repo.id}/conversations/${id}`);
-    setMsgs(m.map((x) => ({ key: String(x.id), role: x.role, content: x.content, category: x.category, citations: x.citations })));
-  };
-
-  const newChat = () => {
-    abortRef.current?.abort();
-    setConvId(null);
-    setMsgs([]);
-    setFocus(null);
-  };
-
-  const send = useCallback(
-    async (text: string, cat: Category | null, foc: AskIntent['focus'] | null, cid: number | null) => {
-      const q = text.trim();
-      if (!q) return;
-      setBusy(true);
-      setInput('');
-      const userKey = `u${Date.now()}`;
-      const aKey = `a${Date.now()}`;
-      setMsgs((m) => [...m, { key: userKey, role: 'user', content: q, category: cat, citations: [] }, { key: aKey, role: 'assistant', content: '', category: cat, citations: [], streaming: true }]);
-      const update = (fn: (m: UiMsg) => UiMsg) => setMsgs((ms) => ms.map((m) => (m.key === aKey ? fn(m) : m)));
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
-      try {
-        await ask(
-          repo.id,
-          { question: q, category: cat ?? undefined, conversationId: cid ?? undefined, focus: foc ? { componentId: foc.componentId, connectionId: foc.connectionId, path: foc.path, symbol: foc.symbol, snippet: foc.snippet } : undefined },
-          (ev: AskEvent) => {
-            if (ev.type === 'meta') {
-              setConvId(ev.conversationId);
-              update((m) => ({ ...m, category: ev.category }));
-            } else if (ev.type === 'sources') update((m) => ({ ...m, sources: ev.citations }));
-            else if (ev.type === 'token') update((m) => ({ ...m, content: m.content + ev.text }));
-            else if (ev.type === 'step') update((m) => ({ ...m, steps: upsertStep(m.steps ?? [], ev.step) }));
-            else if (ev.type === 'reset') update((m) => ({ ...m, notes: [...(m.notes ?? []), ev.text.trim()].filter(Boolean), content: '' }));
-            else if (ev.type === 'done') update((m) => ({ ...m, citations: ev.citations, streaming: false }));
-            else if (ev.type === 'error') update((m) => ({ ...m, content: m.content + `\n\n**Error:** ${ev.message}`, streaming: false }));
-          },
-          ctrl.signal,
-        );
-      } catch (err) {
-        if ((err as Error).name !== 'AbortError') update((m) => ({ ...m, content: `**Error:** ${(err as Error).message}`, streaming: false }));
-      } finally {
-        update((m) => ({ ...m, streaming: false }));
-        setBusy(false);
-        loadConvs();
-      }
-    },
-    [repo.id, loadConvs],
-  );
+  const send = (text: string, cat: Category | null, foc: AskIntent['focus'] | null, cid: number | null) => void store.send(text, cat, foc, cid);
+  const setInput = (v: string) => store.set({ input: v });
+  const setCategory = (c: Category | null) => store.set({ category: c });
+  const setFocus = (f: AskIntent['focus'] | null) => store.set({ focus: f });
+  const openConv = (id: number) => void store.openConv(id).catch(() => undefined);
+  const newChat = () => store.newChat();
 
   // Handle intents from other views ("Ask about this component", suggested questions, ...).
   useEffect(() => {
     if (!intent) return;
     onIntentConsumed();
-    if (intent.category) setCategory(intent.category);
-    if (intent.focus) {
-      setFocus(intent.focus);
-      setConvId(null);
-      setMsgs([]);
+    if (store.get().busy) {
+      // An answer is still being written: keep it, and leave the new question ready to send after it.
+      store.set({ ...(intent.category ? { category: intent.category } : {}), ...(intent.focus ? { focus: intent.focus } : {}), ...(intent.question ? { input: intent.question } : {}) });
+      return;
     }
-    if (intent.question && intent.autoSend) {
-      setConvId(null);
-      setMsgs([]);
-      void send(intent.question, intent.category ?? null, intent.focus ?? null, null);
-    } else if (intent.question) setInput(intent.question);
-  }, [intent, onIntentConsumed, send]);
+    if (intent.category) store.set({ category: intent.category });
+    if (intent.focus || (intent.question && intent.autoSend)) store.newChat();
+    if (intent.focus) store.set({ focus: intent.focus });
+    if (intent.question && intent.autoSend) void store.send(intent.question, intent.category ?? null, intent.focus ?? null, null);
+    else if (intent.question) store.set({ input: intent.question });
+  }, [intent, onIntentConsumed, store]);
 
   const shownSuggestions = suggested.filter((s) => !category || s.category === category).slice(0, 8);
 
@@ -133,7 +70,7 @@ export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; o
                 <p className="muted">Answers draw on the generated knowledge base and the relevant source code, with clickable citations.</p>
                 <div className="suggest" style={{ marginTop: 14 }}>
                   {shownSuggestions.map((s, i) => (
-                    <button key={i} onClick={() => send(s.question, s.category, focus, null)}>
+                    <button key={i} disabled={busy} onClick={() => send(s.question, s.category, focus, null)}>
                       <span className="muted">{CATEGORY_META[s.category].icon}</span> {s.question}
                     </button>
                   ))}
@@ -167,7 +104,7 @@ export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; o
             className="composer-inner"
             onSubmit={(e) => {
               e.preventDefault();
-              void send(input, category, focus, convId);
+              send(input, category, focus, convId);
             }}
           >
             {focus && (
@@ -194,12 +131,12 @@ export function Chat({ intent, onIntentConsumed }: { intent: AskIntent | null; o
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    void send(input, category, focus, convId);
+                    send(input, category, focus, convId);
                   }
                 }}
               />
               {busy ? (
-                <button type="button" className="btn" onClick={() => abortRef.current?.abort()}>Stop</button>
+                <button type="button" className="btn" onClick={() => store.stop()}>Stop</button>
               ) : (
                 <button className="btn primary" disabled={!input.trim()}>Ask</button>
               )}

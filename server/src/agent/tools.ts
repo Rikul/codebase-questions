@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { CATEGORIES, COMMIT_TYPES, defaultView } from '@cq/shared';
+import type { SizeBucket } from '@cq/shared';
+import { CATEGORIES, COMMIT_TYPES, defaultView, SIZE_BUCKETS } from '@cq/shared';
 import { listCommits } from '../history/commits.js';
 import type { DB } from '../db/index.js';
 import { json } from '../db/index.js';
@@ -394,10 +395,10 @@ export function repoTools(ix: RepoIndex): AgentTool[] {
     {
       name: 'list_commits',
       description:
-        'List indexed commits, newest first, filtered by type (feat, fix, refactor, chore, docs, test, other), size in lines changed (min/max or buckets XS <10, S <50, M <250, L <1000, XL 1000+), author, a file or directory path, ISO date range, or text in the message. Returns the total and each commit with sha, date, author, type, lines added/deleted and files changed. Sort "newest" (default), "oldest" or "largest" (biggest changes first).',
+        `List indexed commits, newest first, filtered by type (${COMMIT_TYPES.join(', ')}), size in lines changed (min/max or buckets ${SIZE_BUCKETS.map((b) => `${b.id} ${b.max === Infinity ? `${b.min}+` : `<${b.max}`}`).join(', ')}), author, a file or directory path, ISO date range, or text in the message. Returns the total and each commit with sha, date, author, type, lines added/deleted and files changed. Sort "newest" (default), "oldest" or "largest" (biggest changes first).`,
       schema: z.object({
         types: z.array(z.enum(COMMIT_TYPES)).optional(),
-        sizes: z.array(z.enum(['XS', 'S', 'M', 'L', 'XL'])).optional(),
+        sizes: z.array(z.enum(SIZE_BUCKETS.map((b) => b.id) as [SizeBucket, ...SizeBucket[]])).optional(),
         min_lines: z.number().int().optional(),
         max_lines: z.number().int().optional(),
         author: z.string().optional(),

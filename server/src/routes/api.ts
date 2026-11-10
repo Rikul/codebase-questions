@@ -150,7 +150,13 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
       });
     },
     async (req, res) => {
-      const limits = { maxBytes: config.ingest.maxRepoMb * 1024 * 1024, maxFiles: config.ingest.maxRepoFiles, maxFileBytes: config.ingest.maxFileBytes };
+      const limits = {
+        maxBytes: config.ingest.maxRepoMb * 1024 * 1024,
+        maxFiles: config.ingest.maxRepoFiles,
+        maxFileBytes: config.ingest.maxFileBytes,
+        // HISTORY_DEPTH=-1 turns history off for uploads too.
+        maxHistoryBytes: config.ingest.historyDepth < 0 ? 0 : config.ingest.maxHistoryMb * 1024 * 1024,
+      };
       const parts = (req.files ?? {}) as Record<string, Express.Multer.File[] | undefined>;
       const named = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
       try {
@@ -197,16 +203,12 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     deleteRepo(db, req.params.id);
     invalidateVectors(req.params.id);
     res.json({ ok: true });
-    // Reclaim the space after responding (VACUUM blocks other queries while it runs).
-    setImmediate(() => {
-      const started = Date.now();
-      try {
-        const { beforeMb, afterMb } = compactDb(db);
-        log('info', 'db.compacted', { durationMs: Date.now() - started, beforeMb: Math.round(beforeMb), afterMb: Math.round(afterMb) });
-      } catch (err) {
-        log('warn', 'db.compact.failed', errorDetails(err));
-      }
-    });
+    // Reclaim the space after responding, in small steps so other requests are not held up.
+    const started = Date.now();
+    compactDb(db).then(
+      ({ beforeMb, afterMb }) => log('info', 'db.compacted', { durationMs: Date.now() - started, beforeMb: Math.round(beforeMb), afterMb: Math.round(afterMb) }),
+      (err) => log('warn', 'db.compact.failed', errorDetails(err)),
+    );
   });
 
   r.post('/repos/:id/reanalyze', (req, res) => {

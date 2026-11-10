@@ -86,6 +86,8 @@ export class ChatStore {
         this.repoId,
         { question: q, category: cat ?? undefined, conversationId: cid ?? undefined, focus: foc ? { componentId: foc.componentId, connectionId: foc.connectionId, path: foc.path, symbol: foc.symbol, snippet: foc.snippet } : undefined },
         (ev: AskEvent) => {
+          // A request that was stopped (Stop, another conversation opened, New chat) must not touch the store.
+          if (ctrl.signal.aborted) return;
           if (ev.type === 'meta') {
             this.set((s) => ({ convId: ev.conversationId, convsVersion: s.convsVersion + 1 }));
             update((m) => ({ ...m, category: ev.category }));

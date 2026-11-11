@@ -1,14 +1,12 @@
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { unwrapMarkdown } from '@cq/shared';
+import { linkCitations } from '../lib/citations';
 import { useRepo } from '../lib/repoContext';
 
-const CITE_RE = /\[([^\]\s:]+?\.[\w]+|[^\]\s:]+?\/[^\]\s:]+?):(\d+)(?:-(\d+))?\]/g;
 const PATH_LIKE = /^((?:[\w@.~-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:-(\d+))?)?$/;
 
-/** Turn `[path:1-2]` citations into links the renderer can make clickable. */
-function preprocess(md: string): string {
-  return md.replace(CITE_RE, (_m, p, s, e) => `[${p}:${s}${e ? `-${e}` : ''}](cite:${encodeURIComponent(p)}:${s}:${e ?? s})`);
-}
+const lineOf = (v?: string) => (v ? Number(v) : undefined);
 
 export function Markdown({ children }: { children: string }) {
   const { openCode } = useRepo();
@@ -20,10 +18,12 @@ export function Markdown({ children }: { children: string }) {
         components={{
           a({ href, children: kids }) {
             if (href?.startsWith('cite:')) {
-              const [, p, s, e] = href.split(':');
+              const [, enc, s, e] = href.split(':');
+              const p = decodeURIComponent(enc);
+              // Label from the path itself: as link text, `__init__.py` would render as bold "init".
               return (
-                <button className="cite" onClick={() => openCode(decodeURIComponent(p), Number(s), Number(e))}>
-                  {kids}
+                <button className="cite" onClick={() => openCode(p, lineOf(s), lineOf(e))}>
+                  {s ? `${p}:${s}${e && e !== s ? `-${e}` : ''}` : p}
                 </button>
               );
             }
@@ -50,7 +50,7 @@ export function Markdown({ children }: { children: string }) {
           },
         }}
       >
-        {preprocess(children)}
+        {linkCitations(String(unwrapMarkdown(children)))}
       </ReactMarkdown>
     </div>
   );

@@ -1,5 +1,41 @@
 import { z } from 'zod';
 
+const WRAPPER_KEYS = ['markdown', 'md', 'text', 'content', 'value'];
+
+/**
+ * Models sometimes return a markdown field wrapped as `{"markdown": "..."}`, either as an object
+ * or as that JSON in a string. Returns the markdown inside, or the value unchanged.
+ */
+export function unwrapMarkdown(v: unknown): unknown {
+  const inner = (o: unknown): string | undefined => {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
+    const entries = Object.entries(o as Record<string, unknown>);
+    const hit = entries.find(([k, x]) => WRAPPER_KEYS.includes(k.toLowerCase()) && typeof x === 'string') ?? (entries.length === 1 && typeof entries[0][1] === 'string' ? entries[0] : undefined);
+    return hit?.[1] as string | undefined;
+  };
+  if (typeof v !== 'string') return inner(v) ?? v;
+  const t = v.trim();
+  if (!t.startsWith('{')) return v;
+  try {
+    return inner(JSON.parse(t)) ?? v;
+  } catch {
+    // Truncated or not quite JSON: take the text after a known wrapper key.
+    const m = /^\{\s*"(?:markdown|md|text|content|value)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*\}?)?$/i.exec(t);
+    if (!m) return v;
+    try {
+      return JSON.parse(`"${m[1]}"`) as string;
+    } catch {
+      return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    }
+  }
+}
+
+/** A markdown string field filled by a model (unwraps `{"markdown": ...}`). */
+export const markdownField = (description?: string) => {
+  const s = z.preprocess(unwrapMarkdown, z.string());
+  return description ? s.describe(description) : s;
+};
+
 export * from './archView';
 
 /** Paths never analyzed (gitignore syntax). Shared so the browser can skip them when uploading a folder. */
@@ -136,7 +172,7 @@ export const InsightSchema = z.object({
   category: CategorySchema,
   kind: z.string(),
   title: z.string(),
-  bodyMd: z.string(),
+  bodyMd: markdownField(),
   severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional(),
   refs: z.array(CodeRefSchema).default([]),
 });
@@ -249,9 +285,9 @@ const LinkSchema = z.object({
 });
 
 export const ExplanationSchema = z.object({
-  what: z.string().describe('What it is and its single main responsibility (markdown, 2-4 sentences, cite [path:start-end])'),
-  howItFits: z.string().describe('How it fits with the rest of the project: component, layer, who depends on it and what it depends on (markdown)'),
-  whenUsed: z.string().describe('When it is used at runtime: startup, per HTTP request (which routes), from a job, in tests, build time... Trace the chain (markdown)'),
+  what: markdownField('What it is and its single main responsibility (markdown, 2-4 sentences, cite [path:start-end])'),
+  howItFits: markdownField('How it fits with the rest of the project: component, layer, who depends on it and what it depends on (markdown)'),
+  whenUsed: markdownField('When it is used at runtime: startup, per HTTP request (which routes), from a job, in tests, build time... Trace the chain (markdown)'),
   contains: z
     .array(z.object({ name: z.string(), kind: z.string(), line: z.number().int().optional(), description: z.string() }))
     .describe('Important functions/classes/variables it contains (for a symbol: its key parameters, fields, or inner steps)'),
@@ -262,8 +298,8 @@ export const ExplanationSchema = z.object({
   gotchas: z.array(z.string()).optional().describe('Pitfalls, side effects, error handling or security notes worth knowing'),
   history: z
     .object({
-      created: z.string().describe('When and by whom it was created/introduced, with commit sha (markdown). Say "on or before" if history is truncated.'),
-      evolution: z.string().describe('How and why it changed over time, citing short commit shas (markdown, 2-5 sentences)'),
+      created: markdownField('When and by whom it was created/introduced, with commit sha (markdown). Say "on or before" if history is truncated.'),
+      evolution: markdownField('How and why it changed over time, citing short commit shas (markdown, 2-5 sentences)'),
       keyCommits: z.array(z.object({ sha: z.string(), date: z.string().optional(), why: z.string() })).describe('The most important commits in its history'),
     })
     .optional()
@@ -295,7 +331,7 @@ export type ExplainEvent =
 // ---------- "Ask the diagram" ----------
 
 export const DiagramAnswerSchema = z.object({
-  answerMd: z.string().describe('Concise markdown answer with [path:start-end] citations'),
+  answerMd: markdownField('Concise markdown answer with [path:start-end] citations'),
   highlight: z.object({ componentIds: z.array(z.string()), connectionIds: z.array(z.string()) }),
   tour: z
     .array(
@@ -330,7 +366,7 @@ export const ReviewFindingSchema = z.object({
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 
 export const ReviewSchema = z.object({
-  summaryMd: z.string().describe('Markdown overview: overall quality, the main risks, and what to fix first'),
+  summaryMd: markdownField('Markdown overview: overall quality, the main risks, and what to fix first'),
   strengths: z.array(z.string()).optional().describe('A few things the code does well'),
   findings: z.array(ReviewFindingSchema).describe('Concrete problems, most severe first'),
 });

@@ -26,7 +26,9 @@ export function unwrapMarkdown(v: unknown): unknown {
     try {
       return JSON.parse(`"${m[1]}"`) as string;
     } catch {
-      return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+      // Cut off mid-escape: decode the complete JSON escapes in one pass and drop a dangling one.
+      const esc: Record<string, string> = { '"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+      return m[1].replace(/\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))|\\u?[0-9a-fA-F]{0,3}$|\\$/g, (_x, u?: string, c?: string) => (u ? String.fromCharCode(parseInt(u, 16)) : c ? esc[c] : ''));
     }
   }
 }

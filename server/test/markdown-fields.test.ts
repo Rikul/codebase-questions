@@ -12,6 +12,9 @@ describe('markdown fields filled by a model', () => {
     ['plain **markdown**', 'plain **markdown**'],
     ['{ not json }', '{ not json }'],
     ['{"markdown": "x"} extra text', '{"markdown": "x"} extra text'],
+    // Cut off mid-escape: complete escapes decoded in one pass, the dangling one dropped.
+    ['{"markdown": "a\\\\nb\\tc \\u00e9 \\', 'a\\nb\tc é '],
+    ['{"markdown": "tab\\tthen \\u00', 'tab\tthen '],
     ['{"a": 1, "b": 2}', '{"a": 1, "b": 2}'],
   ])('%j → %j', (raw, want) => expect(unwrapMarkdown(raw)).toBe(want));
 
@@ -74,7 +77,7 @@ describe('citation links in rendered markdown', () => {
     expect(linkCitations('```\n[setup.py]\n```\nsee [setup.py]', isFile)).toBe('```\n[setup.py]\n```\nsee [setup.py](cite:setup.py::)');
   });
 
-  it('falls back to the shape of the name before the file list is loaded', () => {
-    expect(linkCitations('[datasette/app.py] [setup.py] [v1.2] [e.g.]')).toBe('[datasette/app.py](cite:datasette%2Fapp.py::) [setup.py](cite:setup.py::) [v1.2] [e.g.]');
+  it('links only citations with line numbers before the file list is loaded', () => {
+    expect(linkCitations('[datasette/app.py] [Node.js] [GET/POST] [src/a.ts:3]')).toBe('[datasette/app.py] [Node.js] [GET/POST] [src/a.ts:3](cite:src%2Fa.ts:3:3)');
   });
 });

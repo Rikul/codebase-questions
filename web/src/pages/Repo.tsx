@@ -112,7 +112,11 @@ export function Repo() {
   useEffect(() => {
     if (!pathsKey) return;
     let active = true;
-    api<string[]>(`/repos/${pathsKey.split(':')[0]}/paths`).then((p) => active && setPaths(new Set(p))).catch(() => undefined);
+    // Never judge citations against another repository's files (or a list that failed to load).
+    setPaths(null);
+    api<string[]>(`/repos/${pathsKey.split(':')[0]}/paths`)
+      .then((p) => active && setPaths(new Set(p)))
+      .catch(() => active && setPaths(null));
     return () => {
       active = false;
     };

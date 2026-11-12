@@ -311,6 +311,12 @@ export function apiRouter(db: DB, llm: LLMProvider, embeddings: EmbeddingProvide
     });
   });
 
+  // Every analyzed file path, for telling file citations apart from other bracketed text.
+  r.get('/repos/:id/paths', (req, res) => {
+    if (!getRepo(req, res)) return;
+    res.json((db.prepare('SELECT path FROM files WHERE repo_id=? ORDER BY path').all(req.params.id) as { path: string }[]).map((r) => r.path));
+  });
+
   r.get('/repos/:id/files', (req, res) => {
     if (!getRepo(req, res)) return;
     const p = typeof req.query.path === 'string' ? req.query.path : '';

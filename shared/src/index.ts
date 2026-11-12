@@ -21,7 +21,8 @@ export function unwrapMarkdown(v: unknown): unknown {
   } catch {
     // Truncated or not quite JSON: take the text after a known wrapper key.
     const m = /^\{\s*"(?:markdown|md|text|content|value)"\s*:\s*"([\s\S]*?)(?:(?<!\\)"\s*\}?)?$/i.exec(t);
-    if (!m) return v;
+    // Text after the closing `"}` means this is not just a wrapped value: leave it as it is.
+    if (!m || /(?<!\\)"\s*\}\s*\S/.test(m[1])) return v;
     try {
       return JSON.parse(`"${m[1]}"`) as string;
     } catch {
@@ -360,8 +361,8 @@ export const ReviewFindingSchema = z.object({
   path: z.string().optional().describe('File the problem is in'),
   startLine: z.number().int().optional(),
   endLine: z.number().int().optional(),
-  detail: z.string().describe('Markdown: what is wrong, why it matters, and the evidence (cite [path:start-end])'),
-  suggestion: z.string().optional().describe('Markdown: a concrete fix'),
+  detail: markdownField('Markdown: what is wrong, why it matters, and the evidence (cite [path:start-end])'),
+  suggestion: markdownField('Markdown: a concrete fix').optional(),
 });
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 

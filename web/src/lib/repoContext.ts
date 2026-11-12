@@ -17,6 +17,8 @@ export interface AskIntent {
 
 export interface RepoCtx {
   repo: RepoSummary;
+  /** Paths of the analyzed files, once loaded. */
+  paths: Set<string> | null;
   openCode: (path: string, startLine?: number, endLine?: number) => void;
   askAbout: (intent: AskIntent) => void;
   /** Open the Files tab on a file, optionally explaining a symbol in it. */

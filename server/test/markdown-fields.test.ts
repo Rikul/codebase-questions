@@ -11,6 +11,7 @@ describe('markdown fields filled by a model', () => {
     ['{"markdown": "escaped \\"quote\\"', 'escaped "quote"'],
     ['plain **markdown**', 'plain **markdown**'],
     ['{ not json }', '{ not json }'],
+    ['{"markdown": "x"} extra text', '{"markdown": "x"} extra text'],
     ['{"a": 1, "b": 2}', '{"a": 1, "b": 2}'],
   ])('%j → %j', (raw, want) => expect(unwrapMarkdown(raw)).toBe(want));
 
@@ -42,6 +43,9 @@ describe('markdown fields filled by a model', () => {
 });
 
 describe('citation links in rendered markdown', () => {
+  const files = new Set(['datasette/publish/heroku.py', 'datasette/publish/cloudrun.py', 'datasette/__init__.py', 'setup.py', 'src/a.ts']);
+  const isFile = (p: string) => files.has(p);
+
   it.each([
     // The onboarding text that was left unlinked.
     ['via [datasette/publish/heroku.py] and [datasette/publish/cloudrun.py]', 'via [datasette/publish/heroku.py](cite:datasette%2Fpublish%2Fheroku.py::) and [datasette/publish/cloudrun.py](cite:datasette%2Fpublish%2Fcloudrun.py::)'],
@@ -49,12 +53,28 @@ describe('citation links in rendered markdown', () => {
     ['[setup.py]', '[setup.py](cite:setup.py::)'],
     ['[src/a.ts:12]', '[src/a.ts:12](cite:src%2Fa.ts:12:12)'],
     ['[src/a.ts:12-30]', '[src/a.ts:12-30](cite:src%2Fa.ts:12:30)'],
-  ])('%s', (md, want) => expect(linkCitations(md)).toBe(want));
+    ['[src/a.ts]: the entry point', '[src/a.ts](cite:src%2Fa.ts::): the entry point'],
+  ])('%s', (md, want) => expect(linkCitations(md, isFile)).toBe(want));
 
   it.each([
-    'released in [v1.2]',
-    'abbreviations [e.g.] stay',
-    'an existing [link.md](https://example.com/link.md)',
+    'built on [Node.js] and [Vue.js]',
+    'reads [input/output] and handles [GET/POST], [and/or]',
+    'released in [v1.2], [e.g.]',
+    'a file that does not exist: [src/missing.ts]',
+    'an existing [src/a.ts](https://example.com/a.ts)',
+    'a reference link [src/a.ts][docs]\n\n[docs]: https://example.com/guide',
+    'a shortcut reference [setup.py]\n\n[setup.py]: https://example.com/setup',
+    'inline code `[src/a.ts]` and ``x [setup.py] y``',
+    '```json\n{"include": ["src/a.ts", "[setup.py]"]}\n[src/a.ts:3]\n```',
+    '~~~\n[src/a.ts]\n~~~',
     '- [x] done',
-  ])('leaves %s as it is', (md) => expect(linkCitations(md)).toBe(md));
+  ])('leaves %j as it is', (md) => expect(linkCitations(md, isFile)).toBe(md));
+
+  it('links text after a closed code fence', () => {
+    expect(linkCitations('```\n[setup.py]\n```\nsee [setup.py]', isFile)).toBe('```\n[setup.py]\n```\nsee [setup.py](cite:setup.py::)');
+  });
+
+  it('falls back to the shape of the name before the file list is loaded', () => {
+    expect(linkCitations('[datasette/app.py] [setup.py] [v1.2] [e.g.]')).toBe('[datasette/app.py](cite:datasette%2Fapp.py::) [setup.py](cite:setup.py::) [v1.2] [e.g.]');
+  });
 });

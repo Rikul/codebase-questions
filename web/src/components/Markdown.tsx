@@ -9,7 +9,7 @@ const PATH_LIKE = /^((?:[\w@.~-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:-(\d
 const lineOf = (v?: string) => (v ? Number(v) : undefined);
 
 export function Markdown({ children }: { children: string }) {
-  const { openCode } = useRepo();
+  const { openCode, paths } = useRepo();
   return (
     <div className="md">
       <ReactMarkdown
@@ -50,7 +50,7 @@ export function Markdown({ children }: { children: string }) {
           },
         }}
       >
-        {linkCitations(String(unwrapMarkdown(children)))}
+        {linkCitations(String(unwrapMarkdown(children)), paths ? (p) => paths.has(p) : undefined)}
       </ReactMarkdown>
     </div>
   );

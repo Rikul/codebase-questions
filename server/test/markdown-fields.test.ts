@@ -20,7 +20,8 @@ describe('markdown fields filled by a model', () => {
 
   it('unwraps an object value', () => {
     expect(unwrapMarkdown({ markdown: 'obj' })).toBe('obj');
-    expect(unwrapMarkdown({ only: 'one string' })).toBe('one string');
+    expect(unwrapMarkdown({ example: 'value' })).toEqual({ example: 'value' }); // not a wrapper key
+    expect(unwrapMarkdown('{"example": "value"}')).toBe('{"example": "value"}');
     expect(unwrapMarkdown({ a: 1 })).toEqual({ a: 1 });
   });
 
@@ -57,6 +58,7 @@ describe('citation links in rendered markdown', () => {
     ['[src/a.ts:12]', '[src/a.ts:12](cite:src%2Fa.ts:12:12)'],
     ['[src/a.ts:12-30]', '[src/a.ts:12-30](cite:src%2Fa.ts:12:30)'],
     ['[src/a.ts]: the entry point', '[src/a.ts](cite:src%2Fa.ts::): the entry point'],
+    ['[setup.py]: Config', '[setup.py](cite:setup.py::): Config'],
   ])('%s', (md, want) => expect(linkCitations(md, isFile)).toBe(want));
 
   it.each([

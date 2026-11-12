@@ -3,8 +3,9 @@
 // `[path:12]`, `[path:12-30]` or `[path]`. Not `[text](url)` or `[text][ref]`, which are already links.
 const CITE_RE = /\[([^\]\s:()[]+?\.[\w]+|[^\]\s:()[]+?\/[^\]\s:()[]+?)(?::(\d+)(?:-(\d+))?)?\](?![([])/g;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-// A link reference definition: `[label]: destination` with an optional quoted title.
-const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(?:<[^>]*>|\S+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/;
+// A link reference definition: `[label]: destination` with an optional quoted title. Only a
+// destination that looks like a URL or path counts, so `[setup.py]: Config` reads as a citation.
+const DEFINITION = /^ {0,3}\[([^\]]+)\]:\s*(?:<[^>]*>|(?:[a-z][\w+.-]*:\/\/|mailto:|\.{0,2}\/|#)\S*)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*$/i;
 const INLINE_CODE = /(`+)[\s\S]*?[^`]\1(?!`)|(`+)\2(?!`)/g;
 
 /**

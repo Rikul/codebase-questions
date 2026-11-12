@@ -17,7 +17,19 @@ const INLINE_CODE = /(`+)[\s\S]*?[^`]\1(?!`)|(`+)\2(?!`)/g;
  */
 export function linkCitations(md: string, isFile?: (path: string) => boolean): string {
   const lines = md.split('\n');
-  const labels = new Set(lines.map((l) => DEFINITION.exec(l)?.[1].toLowerCase()).filter(Boolean));
+  // Which lines are code (a fence line or inside a fenced block): never rewritten, and their
+  // `[label]: url` lines are not reference definitions.
+  let fence: string | null = null;
+  const code = lines.map((line) => {
+    const f = FENCE.exec(line)?.[1];
+    if (fence) {
+      if (f && f[0] === fence[0] && f.length >= fence.length && !line.trim().slice(f.length)) fence = null;
+      return true;
+    }
+    if (f) fence = f;
+    return Boolean(f);
+  });
+  const labels = new Set(lines.filter((_l, i) => !code[i]).map((l) => DEFINITION.exec(l)?.[1].toLowerCase()).filter(Boolean));
   const link = (text: string) =>
     text.replace(CITE_RE, (m, p: string, s?: string, e?: string) => {
       if (!s && (labels.has(p.toLowerCase()) || !isFile?.(p))) return m;
@@ -34,19 +46,5 @@ export function linkCitations(md: string, isFile?: (path: string) => boolean): s
     }
     return out + link(line.slice(last));
   };
-  let fence: string | null = null;
-  return lines
-    .map((line) => {
-      const f = FENCE.exec(line)?.[1];
-      if (fence) {
-        if (f && f[0] === fence[0] && f.length >= fence.length && !line.trim().slice(f.length)) fence = null;
-        return line;
-      }
-      if (f) {
-        fence = f;
-        return line;
-      }
-      return DEFINITION.test(line) ? line : linkLine(line);
-    })
-    .join('\n');
+  return lines.map((line, i) => (code[i] || DEFINITION.test(line) ? line : linkLine(line))).join('\n');
 }

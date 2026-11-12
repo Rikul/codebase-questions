@@ -21,6 +21,8 @@ describe('markdown fields filled by a model', () => {
   it('unwraps an object value', () => {
     expect(unwrapMarkdown({ markdown: 'obj' })).toBe('obj');
     expect(unwrapMarkdown({ example: 'value' })).toEqual({ example: 'value' }); // not a wrapper key
+    expect(unwrapMarkdown({ text: 'hi', id: 3 })).toEqual({ text: 'hi', id: 3 }); // more than the wrapper
+    expect(unwrapMarkdown('{"text": "hi", "id": 3}')).toBe('{"text": "hi", "id": 3}');
     expect(unwrapMarkdown('{"example": "value"}')).toBe('{"example": "value"}');
     expect(unwrapMarkdown({ a: 1 })).toEqual({ a: 1 });
   });
@@ -74,6 +76,10 @@ describe('citation links in rendered markdown', () => {
     '~~~\n[src/a.ts]\n~~~',
     '- [x] done',
   ])('leaves %j as it is', (md) => expect(linkCitations(md, isFile)).toBe(md));
+
+  it('ignores reference definitions inside code blocks', () => {
+    expect(linkCitations('see [setup.py]\n\n```\n[setup.py]: https://example.com\n```', isFile)).toBe('see [setup.py](cite:setup.py::)\n\n```\n[setup.py]: https://example.com\n```');
+  });
 
   it('links text after a closed code fence', () => {
     expect(linkCitations('```\n[setup.py]\n```\nsee [setup.py]', isFile)).toBe('```\n[setup.py]\n```\nsee [setup.py](cite:setup.py::)');

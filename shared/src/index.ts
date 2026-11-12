@@ -10,9 +10,10 @@ export function unwrapMarkdown(v: unknown): unknown {
   const inner = (o: unknown): string | undefined => {
     if (!o || typeof o !== 'object' || Array.isArray(o)) return undefined;
     const entries = Object.entries(o as Record<string, unknown>);
-    // Only known wrapper keys: any other object is content, not a wrapper.
-    const hit = entries.find(([k, x]) => WRAPPER_KEYS.includes(k.toLowerCase()) && typeof x === 'string');
-    return hit?.[1] as string | undefined;
+    // A wrapper is a single known key holding a string; any other object is content.
+    if (entries.length !== 1) return undefined;
+    const [k, x] = entries[0];
+    return WRAPPER_KEYS.includes(k.toLowerCase()) && typeof x === 'string' ? x : undefined;
   };
   if (typeof v !== 'string') return inner(v) ?? v;
   const t = v.trim();

@@ -181,7 +181,7 @@ export async function* answerQuestion(
   const system = [
     `You are an expert on the ${repo.name} codebase, answering a question in the category "${CATEGORY_LABELS[category]}".`,
     PERSONAS[category],
-    'Ground every claim in the provided context or in code you read with tools; if you still cannot answer, say what is missing and where to look. Cite code inline using the exact format [path/to/file.ext:START-END] with line numbers from code you have seen. Use GitHub-flavored markdown. Be concise and specific.',
+    'Ground every claim in the provided context or in code you read with tools; if you still cannot answer, say what is missing and where to look. Cite code inline using the exact format [path/to/file.ext:START-END], with the full path from the repository root (never just the file name) and line numbers from code you have seen. Use GitHub-flavored markdown. Be concise and specific.',
     focus.text,
   ]
     .filter(Boolean)

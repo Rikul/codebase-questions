@@ -16,7 +16,7 @@ const fileKey = (path: string) => `file:${path}`;
 
 const SEVERITY_GUIDE = `Severity: critical = exploitable vulnerability or data loss; high = likely bug or security hole on a main path; medium = real bug in an edge case, or a design problem that will cause bugs; low = minor issue; info = observation worth knowing.`;
 
-const RULES = `Report only problems you confirmed in code you read. For each finding set path, startLine and endLine, cite the code as [path:start-end] in detail, explain why it matters, and give a concrete fix. Skip style nits and anything a linter or formatter would catch. Order findings most severe first. ${SEVERITY_GUIDE}`;
+const RULES = `Report only problems you confirmed in code you read. For each finding set path, startLine and endLine, cite the code as [path:start-end] in detail (full path from the repository root, never just the file name), explain why it matters, and give a concrete fix. Skip style nits and anything a linter or formatter would catch. Order findings most severe first. ${SEVERITY_GUIDE}`;
 
 const FULL_SYSTEM = `You are a principal engineer doing a code review of an entire repository.
 ${AGENT_GUIDANCE}

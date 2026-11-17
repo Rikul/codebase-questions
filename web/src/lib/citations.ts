@@ -36,7 +36,8 @@ export function pathResolver(paths: Set<string> | null, md: string): Resolve | u
     if (paths.has(p)) return p;
     const candidates = (names.get(p.slice(p.lastIndexOf('/') + 1)) ?? []).filter((f) => f.endsWith(`/${p}`));
     if (candidates.length === 1) return candidates[0];
-    const mentioned = candidates.filter((f) => md.includes(f));
+    // A whole-path mention: not part of a longer path (`src/App.tsx` inside `lib/src/App.tsx`).
+    const mentioned = candidates.filter((f) => new RegExp(`(?<![\\w./-])${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-])`).test(md));
     return mentioned.length === 1 ? mentioned[0] : null;
   };
 }

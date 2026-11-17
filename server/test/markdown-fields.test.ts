@@ -88,6 +88,16 @@ describe('citation links in rendered markdown', () => {
     );
   });
 
+  it('only counts whole-path mentions when picking between files with the same name', () => {
+    const nested = new Set(['src/App.tsx', 'packages/demo/src/App.tsx']);
+    const md = 'See [packages/demo/src/App.tsx:10]. Then [App.tsx:20].';
+    // `src/App.tsx` is only part of the longer path, so the cited file is the one named in full.
+    expect(pathResolver(nested, md)!('App.tsx')).toBe('packages/demo/src/App.tsx');
+    // A path not in the repo that ends with a real one does not count as naming it.
+    expect(pathResolver(nested, 'See lib/src/App.tsx and [App.tsx:3]')!('App.tsx')).toBeNull();
+    expect(pathResolver(nested, 'See (src/App.tsx) and [App.tsx:3]')!('App.tsx')).toBe('src/App.tsx');
+  });
+
   it.each([
     'built on [Node.js] and [Vue.js]',
     'reads [input/output] and handles [GET/POST], [and/or]',

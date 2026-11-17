@@ -107,10 +107,25 @@ export function Repo() {
     const symbol = fSym || fSymLine ? { name: fSym ?? undefined, line: fSymLine ? Number(fSymLine) : undefined } : undefined;
     return { path: fPath, symbol, startLine: start || undefined, endLine: end || start || undefined };
   }, [fPath, fLines, fSym, fSymLine]);
+  const [paths, setPaths] = useState<Set<string> | null>(null);
+  const pathsKey = repo ? `${repo.id}:${repo.status}` : '';
+  useEffect(() => {
+    if (!pathsKey) return;
+    let active = true;
+    // Never judge citations against another repository's files (or a list that failed to load).
+    setPaths(null);
+    api<string[]>(`/repos/${pathsKey.split(':')[0]}/paths`)
+      .then((p) => active && setPaths(new Set(p)))
+      .catch(() => active && setPaths(null));
+    return () => {
+      active = false;
+    };
+  }, [pathsKey]);
   const ctx = useMemo<RepoCtx | null>(
     () =>
       repo && {
         repo,
+        paths,
         // File links open in the Files tab (scrolled to and highlighting the cited lines).
         openCode: (path, startLine, endLine) => showFile({ path, startLine, endLine }),
         askAbout: (i) => {
@@ -121,7 +136,7 @@ export function Repo() {
         openFile: (p, symbol) => showFile({ path: p, symbol }),
         openReview,
       },
-    [repo, setTab, showFile, openReview],
+    [repo, paths, setTab, showFile, openReview],
   );
 
   if (error) return <div className="page"><div className="error-box">{error}</div><p><Link to="/">← Back</Link></p></div>;

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Architecture, Category, Insight, SuggestedQuestion } from '@cq/shared';
-import { CATEGORY_LABELS, componentTitle } from '@cq/shared';
+import { CATEGORY_LABELS, componentTitle, markdownField } from '@cq/shared';
 import { jsonWithFallback } from '../llm/index.js';
 import type { RepoContext } from './context.js';
 import { allRoutes, cleanRefs, dirTree, entryPoints, isCode, packageScripts, readmeIntro, truncate } from './context.js';
@@ -12,7 +12,7 @@ const InsightsOut = z.object({
     z.object({
       kind: z.string().describe('section kind, e.g. overview, setup, entry-points, attack-surface, finding, public-api, library-usage'),
       title: z.string(),
-      bodyMd: z.string().describe('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known'),
+      bodyMd: markdownField('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known'),
       severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().catch(undefined).describe('security findings only'),
       refs: z
         .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))

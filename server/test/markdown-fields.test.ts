@@ -98,6 +98,19 @@ describe('citation links in rendered markdown', () => {
     expect(pathResolver(nested, 'See (src/App.tsx) and [App.tsx:3]')!('App.tsx')).toBe('src/App.tsx');
   });
 
+  it('treats a bare name that is also a root-level file as ambiguous when nested files share it', () => {
+    const withRoot = new Set(['App.tsx', 'src/App.tsx', 'README.md', 'docs/guide/README.md', 'setup.py']);
+    // A nested file named in full elsewhere wins over the root file.
+    expect(pathResolver(withRoot, 'See [src/App.tsx:10]. Then [App.tsx:20].')!('App.tsx')).toBe('src/App.tsx');
+    // Nothing to pick one: stays text instead of guessing the root file.
+    expect(pathResolver(withRoot, 'Then [App.tsx:20].')!('App.tsx')).toBeNull();
+    expect(pathResolver(withRoot, 'Read [README.md]')!('README.md')).toBeNull();
+    // Unambiguous root files and paths with a folder are exact.
+    expect(pathResolver(withRoot, '[setup.py:3]')!('setup.py')).toBe('setup.py');
+    expect(pathResolver(withRoot, '[src/App.tsx:3]')!('src/App.tsx')).toBe('src/App.tsx');
+    expect(pathResolver(withRoot, '[./App.tsx:3]')!('./App.tsx')).toBeNull();
+  });
+
   it.each([
     'built on [Node.js] and [Vue.js]',
     'reads [input/output] and handles [GET/POST], [and/or]',

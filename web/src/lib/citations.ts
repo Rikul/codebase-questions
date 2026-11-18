@@ -33,9 +33,14 @@ export function pathResolver(paths: Set<string> | null, md: string): Resolve | u
   const names = index;
   return (raw) => {
     const p = raw.replace(/^\.?\//, '');
-    if (paths.has(p)) return p;
+    // Files in folders whose path ends with the cited name or partial path.
     const candidates = (names.get(p.slice(p.lastIndexOf('/') + 1)) ?? []).filter((f) => f.endsWith(`/${p}`));
-    if (candidates.length === 1) return candidates[0];
+    if (paths.has(p)) {
+      // A path with a folder, or a root-level file no nested file shares its name with, is exact.
+      // A bare name that is also a root file is ambiguous: its own citation would count as naming
+      // the root file, so only a nested file named in full elsewhere is chosen; otherwise text.
+      if (p.includes('/') || !candidates.length) return p;
+    } else if (candidates.length === 1) return candidates[0];
     // A whole-path mention: not part of a longer path (`src/App.tsx` inside `lib/src/App.tsx`).
     const mentioned = candidates.filter((f) => new RegExp(`(?<![\\w./-])${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-])`).test(md));
     return mentioned.length === 1 ? mentioned[0] : null;

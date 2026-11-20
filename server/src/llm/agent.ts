@@ -137,4 +137,4 @@ function summarize(content: string): string {
   return content.length > 140 ? `${lines} lines, ${content.length.toLocaleString()} chars` : content.replace(/\s+/g, ' ');
 }
 
-export const AGENT_GUIDANCE = `You can inspect the repository with tools. Investigate before you answer: read the relevant code, follow references and imports, and verify claims against the source. Prefer a few targeted calls (call several tools at once when they are independent) over many broad ones. Cite code only from lines you actually read, as [path:START-END].`;
+export const AGENT_GUIDANCE = `You can inspect the repository with tools. Investigate before you answer: read the relevant code, follow references and imports, and verify claims against the source. Prefer a few targeted calls (call several tools at once when they are independent) over many broad ones. Cite code only from lines you actually read, as [path:START-END] with the full path from the repository root (e.g. [src/components/App.tsx:12-20]), never just the file name.`;

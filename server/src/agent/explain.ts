@@ -36,7 +36,7 @@ Answer six questions and submit them with submit_explanation:
 5. callers and callees — who calls/uses it and what it calls. Verify callers with find_references and callees with symbol_calls or by reading the code; do not guess. Include external libraries as callees (path = package name).
 6. history — when it was created and how it evolved: call file_history (files) or symbol_history (functions/classes/selections), and commit_details on the 1-3 most significant commits to explain WHY it changed. Omit history if the tools report no git history.
 
-Rules: read the target code first. Keep each prose field short (2-5 sentences, markdown allowed) and cite code as [path:start-end]. Put each caller/callee in its list, not in the prose. If something cannot be determined (dynamic dispatch, reflection, string-based routing), say so.`;
+Rules: read the target code first. Keep each prose field short (2-5 sentences, markdown allowed) and cite code as [path:start-end] with the full path from the repository root, never just the file name. Put each caller/callee in its list, not in the prose. If something cannot be determined (dynamic dispatch, reflection, string-based routing), say so.`;
 
 function cacheKey(t: ExplainTarget, snippet?: string) {
   if (t.kind === 'file') return `file:${t.path}`;

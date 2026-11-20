@@ -12,7 +12,7 @@ const InsightsOut = z.object({
     z.object({
       kind: z.string().describe('section kind, e.g. overview, setup, entry-points, attack-surface, finding, public-api, library-usage'),
       title: z.string(),
-      bodyMd: markdownField('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known'),
+      bodyMd: markdownField('GitHub-flavored markdown; cite code as [path/to/file.ts:12-20], or as `path/to/file.ts` when no line numbers are known, always with the full path from the repository root'),
       severity: z.enum(['info', 'low', 'medium', 'high', 'critical']).optional().catch(undefined).describe('security findings only'),
       refs: z
         .array(z.object({ path: z.string(), startLine: z.number().optional(), endLine: z.number().optional(), note: z.string().optional() }))

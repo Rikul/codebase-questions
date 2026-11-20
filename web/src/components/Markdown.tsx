@@ -1,7 +1,7 @@
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { unwrapMarkdown } from '@cq/shared';
-import { linkCitations } from '../lib/citations';
+import { linkCitations, pathResolver } from '../lib/citations';
 import { useRepo } from '../lib/repoContext';
 
 const PATH_LIKE = /^((?:[\w@.~-]+\/)*[\w@.-]+\.[A-Za-z0-9]{1,8})(?::(\d+)(?:-(\d+))?)?$/;
@@ -10,6 +10,8 @@ const lineOf = (v?: string) => (v ? Number(v) : undefined);
 
 export function Markdown({ children }: { children: string }) {
   const { openCode, paths } = useRepo();
+  const md = String(unwrapMarkdown(children));
+  const resolve = pathResolver(paths, md);
   return (
     <div className="md">
       <ReactMarkdown
@@ -18,12 +20,13 @@ export function Markdown({ children }: { children: string }) {
         components={{
           a({ href, children: kids }) {
             if (href?.startsWith('cite:')) {
-              const [, enc, s, e] = href.split(':');
+              const [, enc, s, e, label] = href.split(':');
               const p = decodeURIComponent(enc);
-              // Label from the path itself: as link text, `__init__.py` would render as bold "init".
+              // Label as the citation was written (as link text, `__init__.py` would render as bold
+              // "init"); the full path is in the tooltip.
               return (
-                <button className="cite" onClick={() => openCode(p, lineOf(s), lineOf(e))}>
-                  {s ? `${p}:${s}${e && e !== s ? `-${e}` : ''}` : p}
+                <button className="cite" title={p} onClick={() => openCode(p, lineOf(s), lineOf(e))}>
+                  {label ? decodeURIComponent(label) : s ? `${p}:${s}${e && e !== s ? `-${e}` : ''}` : p}
                 </button>
               );
             }
@@ -37,10 +40,13 @@ export function Markdown({ children }: { children: string }) {
             const text = String(kids ?? '');
             if (!className && !text.includes('\n')) {
               const m = text.match(PATH_LIKE);
-              if (m && (text.includes('/') || m[2])) {
-                const [, p, s, e] = m;
+              // With the file list, link what resolves to a file (`App.tsx:12` included); before it
+              // loads, only what looks like a path.
+              const target = m && (resolve ? resolve(m[1]) : text.includes('/') || m[2] ? m[1] : null);
+              if (m && target) {
+                const [, , s, e] = m;
                 return (
-                  <button className="cite" onClick={() => openCode(p, s ? Number(s) : undefined, e ? Number(e) : s ? Number(s) : undefined)}>
+                  <button className="cite" title={target} onClick={() => openCode(target, lineOf(s), lineOf(e ?? s))}>
                     {text}
                   </button>
                 );
@@ -50,7 +56,7 @@ export function Markdown({ children }: { children: string }) {
           },
         }}
       >
-        {linkCitations(String(unwrapMarkdown(children)), paths ? (p) => paths.has(p) : undefined)}
+        {linkCitations(md, resolve)}
       </ReactMarkdown>
     </div>
   );

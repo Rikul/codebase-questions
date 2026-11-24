@@ -307,13 +307,14 @@ export async function analyzeDirectory(
   // clearAnalysis empties `commits`, so keep the LLM-assigned commit types for indexHistory first.
   const previousCommitTypes = llmCommitTypes(db, repoId);
   // Embeddings of chunks whose text is unchanged are reused (same embedding model only), so
-  // re-analysis only embeds what changed. Vectors stored before the model was recorded are taken
-  // to be from the current model, as vector search does; reused ones are then recorded with it.
+  // re-analysis only embeds what changed. Vectors stored before the model was recorded are not
+  // reused: the model may have changed since, and reusing would record them as the current one.
+  // The first re-analysis after upgrading embeds them again, with the model recorded.
   const embeddingModel = embeddings ? `${embeddings.name}:${embeddings.model}` : null;
   const chunkKey = (p: string, content: string) => crypto.createHash('sha1').update(`${p}\n${content}`).digest('hex');
   const previousVectors = new Map<string, Buffer>();
   if (embeddingModel) {
-    for (const r of db.prepare('SELECT path, content, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)').iterate(repoId, embeddingModel) as Iterable<{ path: string; content: string; embedding: Buffer }>) {
+    for (const r of db.prepare('SELECT path, content, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND embedding_model=?').iterate(repoId, embeddingModel) as Iterable<{ path: string; content: string; embedding: Buffer }>) {
       previousVectors.set(chunkKey(r.path, r.content), r.embedding);
     }
   }

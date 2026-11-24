@@ -90,7 +90,8 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
     let cache = vecCache.get(repoId);
     if (!cache) {
       // Only vectors from the current embedding model. Rows from before the model was recorded are
-      // taken to be from it; a vector of another size is skipped when scoring.
+      // used until the next re-analysis re-embeds them (it never reuses them); a vector of another
+      // size is skipped when scoring.
       const model = `${opts.embeddings.name}:${opts.embeddings.model}`;
       const rows = db
         .prepare('SELECT id, embedding FROM chunks WHERE repo_id=? AND searchable=1 AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)')

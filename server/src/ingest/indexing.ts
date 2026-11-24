@@ -37,7 +37,11 @@ const DATA_MIN_BYTES = 8_000;
 export function indexLevel(path: string, content: string, isTest: boolean): { level: IndexLevel; reason?: SkipReason } {
   if (SNAPSHOT.test(path)) return { level: 'skip', reason: 'snapshot' };
   const t = DATA_FORMAT.test(path) ? TRANSLATION.exec(path) : null;
-  if (t && !DEFAULT_LANGUAGE.test(t[1] ?? t[2])) return { level: 'skip', reason: 'translation' };
+  if (t) {
+    if (!DEFAULT_LANGUAGE.test(t[1] ?? t[2])) return { level: 'skip', reason: 'translation' };
+    // The default-language catalog stays searchable even when minified (one long line).
+    return { level: isTest ? 'keyword' : 'full' };
+  }
   const head = content.slice(0, 600);
   if (GENERATED.some((re) => re.test(head))) return { level: 'skip', reason: 'generated' };
   if (isDataLike(content)) return { level: 'skip', reason: 'data' };

@@ -291,7 +291,8 @@ function migrate(db: DB) {
   add('chunks', 'searchable', 'INTEGER NOT NULL DEFAULT 1');
   // Keyword search holds searchable chunks only. The triggers keep chunks_fts in step; they are
   // (re)created here so databases from before the searchable column get the conditions too.
-  db.exec(`
+  // One transaction, so a stop between dropping and creating never leaves chunks_fts unmaintained.
+  db.transaction(() => db.exec(`
     DROP TRIGGER IF EXISTS chunks_ai;
     DROP TRIGGER IF EXISTS chunks_ad;
     CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks WHEN new.searchable = 1 BEGIN
@@ -300,7 +301,7 @@ function migrate(db: DB) {
     CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks WHEN old.searchable = 1 BEGIN
       INSERT INTO chunks_fts(chunks_fts, rowid, content, path, repo_id) VALUES ('delete', old.id, old.content, old.path, old.repo_id);
     END;
-  `);
+  `))();
   // Flows (sequence diagrams) were removed.
   db.exec('DROP TABLE IF EXISTS flows');
   backfillCommitStats(db);

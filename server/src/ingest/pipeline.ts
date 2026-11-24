@@ -309,7 +309,7 @@ export async function analyzeDirectory(
   // Embeddings of chunks whose text is unchanged are reused (same embedding model only), so
   // re-analysis only embeds what changed. Vectors stored before the model was recorded are taken
   // to be from the current model, as vector search does; reused ones are then recorded with it.
-  const embeddingModel = embeddings ? `${embeddings.name}:${embeddings.model ?? ''}` : null;
+  const embeddingModel = embeddings ? `${embeddings.name}:${embeddings.model}` : null;
   const chunkKey = (p: string, content: string) => crypto.createHash('sha1').update(`${p}\n${content}`).digest('hex');
   const previousVectors = new Map<string, Buffer>();
   if (embeddingModel) {

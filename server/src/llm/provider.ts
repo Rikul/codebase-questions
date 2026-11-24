@@ -40,7 +40,7 @@ export interface LLMProvider {
 export interface EmbeddingProvider {
   readonly name: string;
   /** Model id; stored with each vector so vectors from another model are never reused. */
-  readonly model?: string;
+  readonly model: string;
   readonly dimensions: number | null;
   embed(texts: string[]): Promise<Float32Array[]>;
 }

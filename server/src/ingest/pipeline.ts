@@ -307,12 +307,13 @@ export async function analyzeDirectory(
   // clearAnalysis empties `commits`, so keep the LLM-assigned commit types for indexHistory first.
   const previousCommitTypes = llmCommitTypes(db, repoId);
   // Embeddings of chunks whose text is unchanged are reused (same embedding model only), so
-  // re-analysis only embeds what changed.
+  // re-analysis only embeds what changed. Vectors stored before the model was recorded are taken
+  // to be from the current model, as vector search does; reused ones are then recorded with it.
   const embeddingModel = embeddings ? `${embeddings.name}:${embeddings.model ?? ''}` : null;
   const chunkKey = (p: string, content: string) => crypto.createHash('sha1').update(`${p}\n${content}`).digest('hex');
   const previousVectors = new Map<string, Buffer>();
   if (embeddingModel) {
-    for (const r of db.prepare('SELECT path, content, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND embedding_model=?').iterate(repoId, embeddingModel) as Iterable<{ path: string; content: string; embedding: Buffer }>) {
+    for (const r of db.prepare('SELECT path, content, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)').iterate(repoId, embeddingModel) as Iterable<{ path: string; content: string; embedding: Buffer }>) {
       previousVectors.set(chunkKey(r.path, r.content), r.embedding);
     }
   }
@@ -325,7 +326,7 @@ export async function analyzeDirectory(
   const insSym = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const insRef = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const refs = buildRefs(files, facts, graph);
-  const insChunk = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content, embedding, embedding_model) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insChunk = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content, embedding, embedding_model, searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   /** Chunks to embed: new or changed text in fully indexed files. */
   const chunkIds: { id: number; text: string }[] = [];
   let reusedVectors = 0;
@@ -343,15 +344,13 @@ export async function analyzeDirectory(
       for (const s of fx.symbols) insSym.run(repoId, f.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine ?? s.line, s.parent ?? null, s.signature ?? null);
       // Snapshots, other-language translations and generated or data files stay out of search;
       // tests are searchable by keyword but not embedded.
+      // Left-out files are still stored (not searchable) so they can be read, grepped and exported.
       const { level, reason } = indexLevel(f.path, f.content, fx.isTest);
-      if (level === 'skip') {
-        skipped.set(reason!, (skipped.get(reason!) ?? 0) + 1);
-        continue;
-      }
+      if (level === 'skip') skipped.set(reason!, (skipped.get(reason!) ?? 0) + 1);
       if (level === 'keyword') keywordOnly++;
       for (const c of chunkFile(f.path, f.content)) {
         const reuse = level === 'full' && embeddingModel ? previousVectors.get(chunkKey(c.path, c.content)) : undefined;
-        const info = insChunk.run(repoId, c.path, c.startLine, c.endLine, c.content, reuse ?? null, reuse ? embeddingModel : null);
+        const info = insChunk.run(repoId, c.path, c.startLine, c.endLine, c.content, reuse ?? null, reuse ? embeddingModel : null, level === 'skip' ? 0 : 1);
         if (reuse) reusedVectors++;
         else if (level === 'full') chunkIds.push({ id: Number(info.lastInsertRowid), text: `${c.path}\n${c.content}` });
       }

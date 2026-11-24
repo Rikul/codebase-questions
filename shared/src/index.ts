@@ -488,7 +488,7 @@ export const ExportSchema = z.object({
     }),
   ),
   chunks: z
-    .array(z.object({ path: z.string(), startLine: z.number(), endLine: z.number(), content: z.string() }))
+    .array(z.object({ path: z.string(), startLine: z.number(), endLine: z.number(), content: z.string(), searchable: z.boolean().optional() }))
     .optional(),
   /** Flows (sequence diagrams) were removed; still accepted so older exports import, but ignored. */
   flows: z.array(z.unknown()).optional(),

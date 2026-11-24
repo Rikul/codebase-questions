@@ -89,10 +89,11 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
   if (opts.embeddings) {
     let cache = vecCache.get(repoId);
     if (!cache) {
-      // Only vectors from the current embedding model (rows from before the model was recorded count).
+      // Only vectors from the current embedding model. Rows from before the model was recorded are
+      // taken to be from it; a vector of another size is skipped when scoring.
       const model = `${opts.embeddings.name}:${opts.embeddings.model ?? ''}`;
       const rows = db
-        .prepare('SELECT id, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)')
+        .prepare('SELECT id, embedding FROM chunks WHERE repo_id=? AND searchable=1 AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)')
         .all(repoId, model) as { id: number; embedding: Buffer }[];
       cache = {
         ids: rows.map((r) => r.id),
@@ -103,7 +104,11 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
     if (cache.ids.length) {
       try {
         const [qv] = await opts.embeddings.embed([question]);
-        const scored = cache.ids.map((id, i) => ({ id, s: cosine(qv, cache!.vecs[i]) })).sort((a, b) => b.s - a.s).slice(0, 40);
+        const scored = cache.ids
+          .map((id, i) => ({ id, s: cache!.vecs[i].length === qv.length ? cosine(qv, cache!.vecs[i]) : -Infinity }))
+          .filter((x) => x.s > -Infinity)
+          .sort((a, b) => b.s - a.s)
+          .slice(0, 40);
         addRanked(scored.map((x) => x.id), 1.2);
       } catch {
         /* embedding failure: keyword results only */
@@ -128,7 +133,7 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
   if (focus.length) {
     const ph = focus.map(() => '(path = ? OR path LIKE ?)').join(' OR ');
     const params = focus.flatMap((p) => [p, `${p}/%`]);
-    const rows = db.prepare(`SELECT id FROM chunks WHERE repo_id=? AND (${ph}) LIMIT 400`).all(repoId, ...params) as { id: number }[];
+    const rows = db.prepare(`SELECT id FROM chunks WHERE repo_id=? AND searchable=1 AND (${ph}) LIMIT 400`).all(repoId, ...params) as { id: number }[];
     const ids = new Set(rows.map((r) => r.id));
     for (const id of ids) rank.set(id, (rank.get(id) ?? 0) + 0.05);
     if (!terms.length) addRanked([...ids].slice(0, 20), 0.5);
@@ -136,7 +141,7 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
 
   if (!rank.size) {
     // Nothing matched: fall back to README + entry points.
-    const rows = db.prepare(`SELECT id FROM chunks WHERE repo_id=? ORDER BY CASE WHEN lower(path) LIKE 'readme%' THEN 0 ELSE 1 END, id LIMIT ?`).all(repoId, limit) as { id: number }[];
+    const rows = db.prepare(`SELECT id FROM chunks WHERE repo_id=? AND searchable=1 ORDER BY CASE WHEN lower(path) LIKE 'readme%' THEN 0 ELSE 1 END, id LIMIT ?`).all(repoId, limit) as { id: number }[];
     addRanked(rows.map((r) => r.id), 0.5);
   }
 

@@ -22,11 +22,14 @@ it('exports the source of files left out of search, so an import can still open 
   let review: Promise<void> = Promise.resolve();
   await analyzeDirectory(db, new MockProvider(), null, 'exp', dir, () => undefined, () => undefined, null, () => undefined, (r) => (review = r));
   await review;
-  expect(db.prepare(`SELECT count(*) AS n FROM chunks WHERE repo_id='exp' AND path='src/locales/fr.json'`).get()).toEqual({ n: 0 });
+  expect(db.prepare(`SELECT searchable FROM chunks WHERE repo_id='exp' AND path='src/locales/fr.json'`).get()).toEqual({ searchable: 0 });
 
   const data = exportProject(db, 'exp', true);
-  expect(data.chunks!.some((c) => c.path === 'src/locales/fr.json')).toBe(true);
+  expect(data.chunks!.find((c) => c.path === 'src/locales/fr.json')).toMatchObject({ searchable: false });
   const imported = importProject(db, data);
   expect(fileContent(db, imported, 'src/locales/fr.json')).toContain('Bonjour');
+  // Still out of keyword search in the imported copy.
+  const hits = db.prepare(`SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH 'Bonjour' AND repo_id=?`).get(imported);
+  expect(hits).toEqual({ n: 0 });
   expect(fileContent(db, imported, 'src/index.ts')).toBeTruthy();
 });

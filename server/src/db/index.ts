@@ -75,19 +75,15 @@ CREATE TABLE IF NOT EXISTS chunks (
   end_line INTEGER NOT NULL,
   content TEXT NOT NULL,
   embedding BLOB,
-  embedding_model TEXT
+  embedding_model TEXT,
+  -- 0: stored so the file can be read (imports, grep) but kept out of search (see ingest/indexing.ts)
+  searchable INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS chunks_repo_path ON chunks(repo_id, path);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
   content, path, repo_id UNINDEXED, content='chunks', content_rowid='id', tokenize='porter unicode61'
 );
-CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-  INSERT INTO chunks_fts(rowid, content, path, repo_id) VALUES (new.id, new.content, new.path, new.repo_id);
-END;
-CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-  INSERT INTO chunks_fts(chunks_fts, rowid, content, path, repo_id) VALUES ('delete', old.id, old.content, old.path, old.repo_id);
-END;
 
 CREATE TABLE IF NOT EXISTS components (
   repo_id TEXT NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
@@ -292,6 +288,19 @@ function migrate(db: DB) {
   add('commits', 'type', 'TEXT');
   add('commits', 'type_source', 'TEXT');
   add('chunks', 'embedding_model', 'TEXT');
+  add('chunks', 'searchable', 'INTEGER NOT NULL DEFAULT 1');
+  // Keyword search holds searchable chunks only. The triggers keep chunks_fts in step; they are
+  // (re)created here so databases from before the searchable column get the conditions too.
+  db.exec(`
+    DROP TRIGGER IF EXISTS chunks_ai;
+    DROP TRIGGER IF EXISTS chunks_ad;
+    CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks WHEN new.searchable = 1 BEGIN
+      INSERT INTO chunks_fts(rowid, content, path, repo_id) VALUES (new.id, new.content, new.path, new.repo_id);
+    END;
+    CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks WHEN old.searchable = 1 BEGIN
+      INSERT INTO chunks_fts(chunks_fts, rowid, content, path, repo_id) VALUES ('delete', old.id, old.content, old.path, old.repo_id);
+    END;
+  `);
   // Flows (sequence diagrams) were removed.
   db.exec('DROP TABLE IF EXISTS flows');
   backfillCommitStats(db);

@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS chunks (
   start_line INTEGER NOT NULL,
   end_line INTEGER NOT NULL,
   content TEXT NOT NULL,
-  embedding BLOB
+  embedding BLOB,
+  embedding_model TEXT
 );
 CREATE INDEX IF NOT EXISTS chunks_repo_path ON chunks(repo_id, path);
 
@@ -290,6 +291,7 @@ function migrate(db: DB) {
   add('commits', 'files', 'INTEGER');
   add('commits', 'type', 'TEXT');
   add('commits', 'type_source', 'TEXT');
+  add('chunks', 'embedding_model', 'TEXT');
   // Flows (sequence diagrams) were removed.
   db.exec('DROP TABLE IF EXISTS flows');
   backfillCommitStats(db);

@@ -89,7 +89,11 @@ export async function retrieve(db: DB, repoId: string, question: string, opts: R
   if (opts.embeddings) {
     let cache = vecCache.get(repoId);
     if (!cache) {
-      const rows = db.prepare('SELECT id, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL').all(repoId) as { id: number; embedding: Buffer }[];
+      // Only vectors from the current embedding model (rows from before the model was recorded count).
+      const model = `${opts.embeddings.name}:${opts.embeddings.model ?? ''}`;
+      const rows = db
+        .prepare('SELECT id, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND (embedding_model=? OR embedding_model IS NULL)')
+        .all(repoId, model) as { id: number; embedding: Buffer }[];
       cache = {
         ids: rows.map((r) => r.id),
         vecs: rows.map((r) => new Float32Array(r.embedding.buffer.slice(r.embedding.byteOffset, r.embedding.byteOffset + r.embedding.byteLength))),

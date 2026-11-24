@@ -115,6 +115,11 @@ describe('search index and embeddings during analysis', () => {
     expect(db.prepare(`SELECT count(*) AS n FROM chunks WHERE repo_id='idx' AND embedding IS NOT NULL AND embedding_model != 'rec:m1'`).get()).toEqual({ n: 0 });
   });
 
+  it('keeps this repository\'s CLAUDE.md (long prose lines) in search', () => {
+    const claudeMd = fs.readFileSync(path.join(import.meta.dirname, '../../CLAUDE.md'), 'utf8');
+    expect(indexLevel('CLAUDE.md', claudeMd, false).level).toBe('full');
+  });
+
   it('re-analysis embeds only changed chunks, and everything again for a new embedding model', async () => {
     const db = openDb(':memory:');
     db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('idx', 'app', 'upload:app', 'running')`).run();

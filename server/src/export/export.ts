@@ -3,7 +3,8 @@ import type { Architecture, ProjectExport } from '@cq/shared';
 import { EXPORT_FORMAT, ExportSchema } from '@cq/shared';
 import type { DB } from '../db/index.js';
 import { backfillCommitStats, json } from '../db/index.js';
-import { getArchitecture } from '../routes/queries.js';
+import { fileContent, getArchitecture } from '../routes/queries.js';
+import { chunkFile } from '../ingest/chunk.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
 import { storeFileHistorySummaries } from '../history/index.js';
 
@@ -81,6 +82,15 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
       endLine: c.end_line,
       content: c.content,
     }));
+    // Files left out of search (snapshots, translations, generated or data files) have no chunks;
+    // take their source from the checkout so an import of this export can still open them.
+    const unindexed = db
+      .prepare('SELECT path FROM files WHERE repo_id=? AND path NOT IN (SELECT DISTINCT path FROM chunks WHERE repo_id=?) ORDER BY path')
+      .all(repoId, repoId) as { path: string }[];
+    for (const { path } of unindexed) {
+      const content = fileContent(db, repoId, path);
+      if (content != null) for (const c of chunkFile(path, content)) out.chunks.push({ path, startLine: c.startLine, endLine: c.endLine, content: c.content });
+    }
   }
   return out;
 }

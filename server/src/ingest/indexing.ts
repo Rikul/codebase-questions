@@ -11,16 +11,16 @@ export type SkipReason = 'snapshot' | 'translation' | 'generated' | 'data';
 
 const SNAPSHOT = /(\.snap$|(^|\/)__snapshots__\/)/;
 // A language code: an ISO 639-1 language (`fr`), or three letters with a subtag (`kab-KAB`),
-// optionally followed by a region or script (`pt-BR`, `es-419`, `zh_Hans`, and `kab-KAB` as used in
-// the wild). Bare three-letter
+// optionally followed by a script and/or region (`pt-BR`, `es-419`, `zh_Hans`, `zh-Hant-TW`, and
+// `kab-KAB` as used in the wild). Bare three-letter
 // names are left out: they are as likely to be words (`all`, `map`).
-const LANG = String.raw`[a-z]{2,3}(?:[-_](?:[a-z]{2,4}|\d{3}))?`;
+const LANG = String.raw`[a-z]{2,3}(?:[-_](?:[a-z]{2,4}|\d{3})){0,2}`;
 // ISO 639-1 language codes (without the withdrawn in/iw/ji/jw/mo/sh), so two-letter folders such as
 // `ui` or `sh` are not languages. Some real codes are also common folder names (`ts`, `cs`, `ml`);
 // translationFolders() covers those.
 const ISO_639_1 = new Set(
   ('aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu ' +
-    'fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik in io is it iu ja jv ka kg ki kj kk kl ' +
+    'fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl ' +
     'km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om ' +
     'or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts ' +
     'tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu').split(' '),

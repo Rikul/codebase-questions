@@ -18,6 +18,7 @@ it('exports the source of files left out of search, so an import can still open 
   const dir = repoDir('exp');
   fs.cpSync(path.join(import.meta.dirname, 'fixtures/sample-app'), dir, { recursive: true });
   fs.mkdirSync(path.join(dir, 'src/locales'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src/locales/en.json'), '{"greeting": "Hello"}\n');
   fs.writeFileSync(path.join(dir, 'src/locales/fr.json'), '{"greeting": "Bonjour"}\n');
   let review: Promise<void> = Promise.resolve();
   await analyzeDirectory(db, new MockProvider(), null, 'exp', dir, () => undefined, () => undefined, null, () => undefined, (r) => (review = r));

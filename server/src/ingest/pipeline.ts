@@ -16,7 +16,7 @@ import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
 import { chunkFile } from './chunk.js';
-import { indexLevel } from './indexing.js';
+import { indexLevel, translationFolders } from './indexing.js';
 import type { SkipReason } from './indexing.js';
 import { parseRepoUrl, syncRepo } from './clone.js';
 import { buildImportGraph, centrality, groupModules, moduleEdges, moduleOf } from './graph.js';
@@ -332,6 +332,7 @@ export async function analyzeDirectory(
   const chunkIds: { id: number; text: string }[] = [];
   let reusedVectors = 0;
   const skipped = new Map<SkipReason, number>();
+  const catalogFolders = translationFolders(files.map((f) => f.path));
   let keywordOnly = 0;
   db.transaction(() => {
     const present = new Set(files.map((f) => f.path));
@@ -346,7 +347,7 @@ export async function analyzeDirectory(
       // Snapshots, other-language translations and generated or data files stay out of search;
       // tests are searchable by keyword but not embedded.
       // Left-out files are still stored (not searchable) so they can be read, grepped and exported.
-      const { level, reason } = indexLevel(f.path, f.content, fx.isTest);
+      const { level, reason } = indexLevel(f.path, f.content, fx.isTest, catalogFolders);
       if (level === 'skip') skipped.set(reason!, (skipped.get(reason!) ?? 0) + 1);
       if (level === 'keyword') keywordOnly++;
       for (const c of chunkFile(f.path, f.content)) {

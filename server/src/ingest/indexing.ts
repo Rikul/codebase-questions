@@ -10,13 +10,27 @@ export type IndexLevel = 'full' | 'keyword' | 'skip';
 export type SkipReason = 'snapshot' | 'translation' | 'generated' | 'data';
 
 const SNAPSHOT = /(\.snap$|(^|\/)__snapshots__\/)/;
-// A language code: `fr`, `pt-BR`, `zh_Hans`, `es-419`, or three letters with a region (`kab-KAB`).
-// Bare three-letter names are left out: they are as likely to be words (`all`, `map`).
-const LANG = String.raw`[a-z]{2}(?:[-_][a-z0-9]{2,4})?|[a-z]{3}[-_][a-z0-9]{2,4}`;
-// Translation catalogs in a locales/i18n/l10n/translations/lang folder, laid out by language: a
-// language-named file (`fr.json`) or a language folder (`fr/common.json`,
-// `fr/LC_MESSAGES/messages.po`) directly under it. Other files there (`i18n/config.json`) are kept.
-const TRANSLATION = new RegExp(String.raw`(?:^|/)(?:locales?|i18n|l10n|translations?|langs?)/(?:(${LANG})/(?:[^/]+/)*[^/]+|(${LANG})\.[^./]+)$`, 'i');
+// A language code: an ISO 639-1 language (`fr`), or three letters with a subtag (`kab-KAB`),
+// optionally followed by a region or script (`pt-BR`, `es-419`, `zh_Hans`, and `kab-KAB` as used in
+// the wild). Bare three-letter
+// names are left out: they are as likely to be words (`all`, `map`).
+const LANG = String.raw`[a-z]{2,3}(?:[-_](?:[a-z]{2,4}|\d{3}))?`;
+// ISO 639-1 language codes (without the withdrawn in/iw/ji/jw/mo/sh), so two-letter folders such as
+// `ui` or `sh` are not languages. Some real codes are also common folder names (`ts`, `cs`, `ml`);
+// translationFolders() covers those.
+const ISO_639_1 = new Set(
+  ('aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy da de dv dz ee el en eo es et eu ' +
+    'fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu hy hz ia id ie ig ii ik in io is it iu ja jv ka kg ki kj kk kl ' +
+    'km kn ko kr ks ku kv kw ky la lb lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om ' +
+    'or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts ' +
+    'tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu').split(' '),
+);
+/** Whether a folder or file name is a language code (see LANG). */
+function isLanguage(code: string): boolean {
+  const [lang, sub] = code.toLowerCase().split(/[-_]/);
+  return lang.length === 2 ? ISO_639_1.has(lang) : Boolean(sub);
+}
+const TRANSLATION_PATH = new RegExp(String.raw`(?:^|/)(?:locales?|i18n|l10n|translations?|langs?)/(?:(${LANG})/(?:[^/]+/)*[^/]+|(${LANG})\.[^./]+)$`, 'i');
 const DATA_FORMAT = /\.(json|ya?ml|po|properties|strings|xliff|xlf|arb|toml)$/i;
 // The default language stays searchable.
 const DEFAULT_LANGUAGE = /^en(?:[-_](?:us|gb))?$/i;
@@ -33,12 +47,39 @@ const GENERATED = [
 // Below this size a file is never treated as data, whatever its content.
 const DATA_MIN_BYTES = 8_000;
 
-/** How a file is indexed, and why it is skipped. */
-export function indexLevel(path: string, content: string, isTest: boolean): { level: IndexLevel; reason?: SkipReason } {
+/** The translation folder (`src/locales`) and language of a catalog-shaped path, or null. */
+function catalog(path: string): { folder: string; lang: string } | null {
+  if (!DATA_FORMAT.test(path)) return null;
+  const t = TRANSLATION_PATH.exec(path);
+  const lang = t && (t[1] ?? t[2]);
+  if (!t || !lang || !isLanguage(lang)) return null;
+  const start = path[t.index] === '/' ? t.index + 1 : t.index;
+  return { folder: path.slice(0, path.indexOf('/', start)), lang };
+}
+
+/**
+ * Folders that really hold translations: they have an English catalog, or catalogs for at least
+ * three languages. A `lang/` folder with `ts/`, `js/` and `py/` (one ISO code, no English) does not.
+ */
+export function translationFolders(paths: Iterable<string>): Set<string> {
+  const langs = new Map<string, Set<string>>();
+  for (const p of paths) {
+    const c = catalog(p);
+    if (c) (langs.get(c.folder) ?? langs.set(c.folder, new Set()).get(c.folder)!).add(c.lang.toLowerCase());
+  }
+  return new Set([...langs].filter(([, l]) => [...l].some((x) => DEFAULT_LANGUAGE.test(x)) || l.size >= 3).map(([f]) => f));
+}
+
+/**
+ * How a file is indexed, and why it is skipped. `folders` (from translationFolders over the whole
+ * repository) limits translations to real translation folders; without it, any catalog-shaped
+ * path counts.
+ */
+export function indexLevel(path: string, content: string, isTest: boolean, folders?: Set<string>): { level: IndexLevel; reason?: SkipReason } {
   if (SNAPSHOT.test(path)) return { level: 'skip', reason: 'snapshot' };
-  const t = DATA_FORMAT.test(path) ? TRANSLATION.exec(path) : null;
-  if (t) {
-    if (!DEFAULT_LANGUAGE.test(t[1] ?? t[2])) return { level: 'skip', reason: 'translation' };
+  const c = catalog(path);
+  if (c && (!folders || folders.has(c.folder))) {
+    if (!DEFAULT_LANGUAGE.test(c.lang)) return { level: 'skip', reason: 'translation' };
     // The default-language catalog stays searchable even when minified (one long line).
     return { level: isTest ? 'keyword' : 'full' };
   }

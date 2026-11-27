@@ -53,6 +53,7 @@ const GENERATED = [
 // How much of a file's leading comments is searched for a banner (a long license header can come
 // first). Only the header: code further down that mentions "generated" or `@generated` does not count.
 const HEADER_MAX = 8_000;
+const PROSE = /\.(?:md|markdown|mdx|rst|txt)$/i;
 // Below this size a file is never treated as data, whatever its content.
 const DATA_MIN_BYTES = 8_000;
 
@@ -92,7 +93,9 @@ export function indexLevel(path: string, content: string, isTest: boolean, folde
     // The default-language catalog stays searchable even when minified (one long line).
     return { level: isTest ? 'keyword' : 'full' };
   }
-  const head = header(content);
+  // In prose, `#` starts a heading, not a comment: only HTML comments can hold a banner there.
+  const prose = PROSE.test(path);
+  const head = prose ? header(content, true).split('\n').filter((l) => !l.trimStart().startsWith('#')).join('\n') : header(content, false);
   if (GENERATED.some((re) => re.test(head))) return { level: 'skip', reason: 'generated' };
   if (isDataLike(content)) return { level: 'skip', reason: 'data' };
   return { level: isTest ? 'keyword' : 'full' };
@@ -101,7 +104,7 @@ export function indexLevel(path: string, content: string, isTest: boolean, folde
 // The file's leading comment block: blank lines, line comments (`//`, `#`, `--`, `;`) and block
 // comments (C-style and HTML) before the first line of code, up to HEADER_MAX characters, and at
 // least the first 600 characters (a banner can follow a `package` or `'use strict'` line).
-function header(content: string): string {
+function header(content: string, prose: boolean): string {
   let end = 0;
   let block: string | null = null;
   for (const line of content.slice(0, HEADER_MAX).split('\n')) {
@@ -111,7 +114,7 @@ function header(content: string): string {
     } else if (t.startsWith('/*') || t.startsWith('<!--')) {
       const close = t.startsWith('/*') ? '*/' : '-->';
       if (!t.slice(2).includes(close)) block = close;
-    } else if (t && !/^(?:\/\/|#|--|;)/.test(t)) break;
+    } else if (t && !(prose ? /^(?:\/\/|--|;)/ : /^(?:\/\/|#|--|;)/).test(t)) break;
     end += line.length + 1;
   }
   return content.slice(0, Math.max(end, 600));

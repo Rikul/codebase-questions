@@ -6,6 +6,7 @@ import { backfillCommitStats, json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
 import { storeFileHistorySummaries } from '../history/index.js';
+import { indexLevel, translationFolders } from '../ingest/indexing.js';
 
 export function exportProject(db: DB, repoId: string, includeSource: boolean): ProjectExport {
   const repo = db.prepare('SELECT * FROM repos WHERE id=?').get(repoId) as any;
@@ -105,7 +106,14 @@ export function importProject(db: DB, data: unknown): string {
     for (const e of p.fileEdges) insE.run(repoId, e.from, e.to, e.kind);
     const insC = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content, searchable) VALUES (?, ?, ?, ?, ?, ?)');
     if (p.chunks?.length) for (const c of p.chunks) insC.run(repoId, c.path, c.startLine, c.endLine, c.content, c.searchable === false ? 0 : 1);
-    else for (const f of p.files) if (f.summary) insC.run(repoId, f.path, 1, 1, `${f.path}\n${f.summary}`, 1); // summaries stay searchable
+    else {
+      // Without source, only the path rules (snapshots, translations) can tell which files the
+      // index left out; their summaries stay out of search too.
+      const folders = translationFolders(p.files.map((f) => f.path));
+      for (const f of p.files) {
+        if (f.summary) insC.run(repoId, f.path, 1, 1, `${f.path}\n${f.summary}`, indexLevel(f.path, '', false, folders).level === 'skip' ? 0 : 1);
+      }
+    }
     for (const c of p.conversations) {
       const cid = Number(db.prepare('INSERT INTO conversations (repo_id, title, created_at) VALUES (?, ?, ?)').run(repoId, c.title, c.createdAt).lastInsertRowid);
       const insM = db.prepare('INSERT INTO messages (conversation_id, role, content, category, citations, created_at) VALUES (?, ?, ?, ?, ?, ?)');

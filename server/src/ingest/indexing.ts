@@ -25,10 +25,15 @@ const ISO_639_1 = new Set(
     'or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw ta te tg th ti tk tl tn to tr ts ' +
     'tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu').split(' '),
 );
-/** Whether a folder or file name is a language code (see LANG). */
+/**
+ * Whether a folder or file name is a language code (see LANG). Subtags must look like a script
+ * (four letters), a region (two letters or three digits), or repeat a three-letter language
+ * (`kab-KAB`), so `fr-tmp` or `app-dev` are not languages.
+ */
 function isLanguage(code: string): boolean {
-  const [lang, sub] = code.toLowerCase().split(/[-_]/);
-  return lang.length === 2 ? ISO_639_1.has(lang) : Boolean(sub);
+  const [lang, ...subs] = code.toLowerCase().split(/[-_]/);
+  const subtagsOk = subs.every((s) => /^(?:[a-z]{2}|[a-z]{4}|\d{3})$/.test(s) || s === lang);
+  return subtagsOk && (lang.length === 2 ? ISO_639_1.has(lang) : subs.length > 0);
 }
 const TRANSLATION_PATH = new RegExp(String.raw`(?:^|/)(?:locales?|i18n|l10n|translations?|langs?)/(?:(${LANG})/(?:[^/]+/)*[^/]+|(${LANG})\.[^./]+)$`, 'i');
 const DATA_FORMAT = /\.(json|ya?ml|po|properties|strings|xliff|xlf|arb|toml)$/i;

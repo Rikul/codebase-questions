@@ -34,3 +34,25 @@ it('exports the source of files left out of search, so an import can still open 
   expect(hits).toEqual({ n: 0 });
   expect(fileContent(db, imported, 'src/index.ts')).toBeTruthy();
 });
+
+it('keeps summaries of left-out files out of search when importing an export without source', async () => {
+  const db = openDb(':memory:');
+  db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('nos', 'app', 'upload:app', 'running')`).run();
+  const dir = repoDir('nos');
+  fs.cpSync(path.join(import.meta.dirname, 'fixtures/sample-app'), dir, { recursive: true });
+  fs.mkdirSync(path.join(dir, 'src/locales'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src/locales/en.json'), '{"greeting": "Hello"}\n');
+  fs.writeFileSync(path.join(dir, 'src/locales/fr.json'), '{"greeting": "Bonjour"}\n');
+  let review: Promise<void> = Promise.resolve();
+  await analyzeDirectory(db, new MockProvider(), null, 'nos', dir, () => undefined, () => undefined, null, () => undefined, (r) => (review = r));
+  await review;
+  db.prepare(`UPDATE files SET summary='French strings zzfrench' WHERE repo_id='nos' AND path='src/locales/fr.json'`).run();
+  db.prepare(`UPDATE files SET summary='English strings zzenglish' WHERE repo_id='nos' AND path='src/locales/en.json'`).run();
+
+  const data = exportProject(db, 'nos', false);
+  expect(data.chunks ?? []).toHaveLength(0);
+  const imported = importProject(db, data);
+  const hits = (q: string) => (db.prepare(`SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH ? AND repo_id=?`).get(q, imported) as { n: number }).n;
+  expect(hits('zzfrench')).toBe(0);
+  expect(hits('zzenglish')).toBe(1);
+});

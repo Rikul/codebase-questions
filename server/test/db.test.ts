@@ -66,6 +66,24 @@ describe('deleting a repository', () => {
     db.close();
   });
 
+  it('upgrades the keyword-search triggers so chunks marked not searchable stay out', () => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-db-')), 'codebase.db');
+    // A database from before the searchable column, with the old unconditional trigger.
+    openDb(file).close();
+    const old = new Database(file);
+    old.exec(`DROP TRIGGER chunks_fts_ai; CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN INSERT INTO chunks_fts(rowid, content, path, repo_id) VALUES (new.id, new.content, new.path, new.repo_id); END;`);
+    old.close();
+    const db = openDb(file);
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name`).all().map((r: any) => r.name)).toEqual(['chunks_fts_ad', 'chunks_fts_ai']);
+    db.prepare(`INSERT INTO repos (id, name, url, status) VALUES ('t', 't', 'upload:t', 'ready')`).run();
+    db.prepare(`INSERT INTO chunks (repo_id, path, start_line, end_line, content, searchable) VALUES ('t', 'a.json', 1, 1, 'Bonjour', 0), ('t', 'b.ts', 1, 1, 'Hello', 1)`).run();
+    expect(db.prepare(`SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH 'Bonjour'`).get()).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH 'Hello'`).get()).toEqual({ n: 1 });
+    db.prepare(`DELETE FROM chunks WHERE repo_id='t'`).run(); // deleting an unindexed row must not touch the index
+    expect(db.prepare(`SELECT count(*) AS n FROM chunks_fts WHERE chunks_fts MATCH 'Hello'`).get()).toEqual({ n: 0 });
+    db.close();
+  });
+
   it('converts a database created without incremental auto-vacuum when it is opened', () => {
     const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cq-db-')), 'codebase.db');
     const legacy = new Database(file);

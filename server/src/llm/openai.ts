@@ -176,7 +176,7 @@ export class OpenAIEmbeddings implements EmbeddingProvider {
   readonly name = 'openai';
   readonly dimensions = null;
   private client: OpenAI;
-  constructor(apiKey: string, private model: string, baseURL?: string) {
+  constructor(apiKey: string, readonly model: string, baseURL?: string) {
     this.client = new OpenAI({ apiKey, baseURL, maxRetries: 2 });
   }
   async embed(texts: string[]): Promise<Float32Array[]> {

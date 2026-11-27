@@ -6,6 +6,7 @@ import { backfillCommitStats, json } from '../db/index.js';
 import { getArchitecture } from '../routes/queries.js';
 import { saveAnalysis } from '../ingest/pipeline.js';
 import { storeFileHistorySummaries } from '../history/index.js';
+import { indexLevel, translationFolders } from '../ingest/indexing.js';
 
 export function exportProject(db: DB, repoId: string, includeSource: boolean): ProjectExport {
   const repo = db.prepare('SELECT * FROM repos WHERE id=?').get(repoId) as any;
@@ -75,11 +76,13 @@ export function exportProject(db: DB, repoId: string, includeSource: boolean): P
     out.refs = (db.prepare('SELECT * FROM refs WHERE repo_id=?').all(repoId) as any[]).map((r) => ({
       name: r.name, path: r.path, line: r.line, kind: r.kind, fromSymbol: r.from_symbol, targetPath: r.target_path, targetLine: r.target_line, confidence: r.confidence,
     }));
-    out.chunks = (db.prepare('SELECT path, start_line, end_line, content FROM chunks WHERE repo_id=? ORDER BY id').all(repoId) as any[]).map((c) => ({
+    out.chunks = (db.prepare('SELECT path, start_line, end_line, content, searchable FROM chunks WHERE repo_id=? ORDER BY id').all(repoId) as any[]).map((c) => ({
       path: c.path,
       startLine: c.start_line,
       endLine: c.end_line,
       content: c.content,
+      // Files left out of search keep their source in the export and stay out of search on import.
+      ...(c.searchable ? {} : { searchable: false }),
     }));
   }
   return out;
@@ -101,9 +104,16 @@ export function importProject(db: DB, data: unknown): string {
     for (const f of p.files) insF.run(repoId, f.path, f.lang, f.size, f.hash, lines.get(f.path) ?? 0, f.summary);
     const insE = db.prepare('INSERT OR IGNORE INTO file_edges (repo_id, src, dst, kind) VALUES (?, ?, ?, ?)');
     for (const e of p.fileEdges) insE.run(repoId, e.from, e.to, e.kind);
-    const insC = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)');
-    if (p.chunks?.length) for (const c of p.chunks) insC.run(repoId, c.path, c.startLine, c.endLine, c.content);
-    else for (const f of p.files) if (f.summary) insC.run(repoId, f.path, 1, 1, `${f.path}\n${f.summary}`); // summaries stay searchable
+    const insC = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content, searchable) VALUES (?, ?, ?, ?, ?, ?)');
+    if (p.chunks?.length) for (const c of p.chunks) insC.run(repoId, c.path, c.startLine, c.endLine, c.content, c.searchable === false ? 0 : 1);
+    else {
+      // Without source, only the path rules (snapshots, translations) can tell which files the
+      // index left out; their summaries stay out of search too.
+      const folders = translationFolders(p.files.map((f) => f.path));
+      for (const f of p.files) {
+        if (f.summary) insC.run(repoId, f.path, 1, 1, `${f.path}\n${f.summary}`, indexLevel(f.path, '', false, folders).level === 'skip' ? 0 : 1);
+      }
+    }
     for (const c of p.conversations) {
       const cid = Number(db.prepare('INSERT INTO conversations (repo_id, title, created_at) VALUES (?, ?, ?)').run(repoId, c.title, c.createdAt).lastInsertRowid);
       const insM = db.prepare('INSERT INTO messages (conversation_id, role, content, category, citations, created_at) VALUES (?, ?, ?, ?, ?, ?)');

@@ -16,6 +16,8 @@ import type { RepoContext } from '../analyze/context.js';
 import { analyzeInsights } from '../analyze/insights.js';
 import { summarizeFiles } from '../analyze/summarize.js';
 import { chunkFile } from './chunk.js';
+import { indexLevel, translationFolders } from './indexing.js';
+import type { SkipReason } from './indexing.js';
 import { parseRepoUrl, syncRepo } from './clone.js';
 import { buildImportGraph, centrality, groupModules, moduleEdges, moduleOf } from './graph.js';
 import { MANIFEST_NAMES, parseFile, parseManifest } from './parse.js';
@@ -239,6 +241,8 @@ export async function settleAfterReview(review: Promise<void>, finish: () => voi
   }
 }
 
+const SKIP_LABEL: Record<SkipReason, string> = { snapshot: 'test snapshots', translation: 'translations', generated: 'generated', data: 'data files' };
+
 /** Run static ingestion + LLM analysis over a checked-out directory and persist everything. */
 export async function analyzeDirectory(
   db: DB,
@@ -302,6 +306,18 @@ export async function analyzeDirectory(
   progress('index', 'Building search index', 0);
   // clearAnalysis empties `commits`, so keep the LLM-assigned commit types for indexHistory first.
   const previousCommitTypes = llmCommitTypes(db, repoId);
+  // Embeddings of chunks whose text is unchanged are reused (same embedding model only), so
+  // re-analysis only embeds what changed. Vectors stored before the model was recorded are not
+  // reused: the model may have changed since, and reusing would record them as the current one.
+  // The first re-analysis after upgrading embeds them again, with the model recorded.
+  const embeddingModel = embeddings ? `${embeddings.name}:${embeddings.model}` : null;
+  const chunkKey = (p: string, content: string) => crypto.createHash('sha1').update(`${p}\n${content}`).digest('hex');
+  const previousVectors = new Map<string, Buffer>();
+  if (embeddingModel) {
+    for (const r of db.prepare('SELECT path, content, embedding FROM chunks WHERE repo_id=? AND embedding IS NOT NULL AND embedding_model=?').iterate(repoId, embeddingModel) as Iterable<{ path: string; content: string; embedding: Buffer }>) {
+      previousVectors.set(chunkKey(r.path, r.content), r.embedding);
+    }
+  }
   clearAnalysis(db, repoId);
   const insFile = db.prepare(
     `INSERT INTO files (repo_id, path, lang, size, hash, lines, meta) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -311,8 +327,13 @@ export async function analyzeDirectory(
   const insSym = db.prepare('INSERT INTO symbols (repo_id, path, name, kind, line, exported, end_line, parent, signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const insRef = db.prepare('INSERT INTO refs (repo_id, name, path, line, kind, from_symbol, target_path, target_line, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const refs = buildRefs(files, facts, graph);
-  const insChunk = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content) VALUES (?, ?, ?, ?, ?)');
+  const insChunk = db.prepare('INSERT INTO chunks (repo_id, path, start_line, end_line, content, embedding, embedding_model, searchable) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  /** Chunks to embed: new or changed text in fully indexed files. */
   const chunkIds: { id: number; text: string }[] = [];
+  let reusedVectors = 0;
+  const skipped = new Map<SkipReason, number>();
+  const catalogFolders = translationFolders(files.map((f) => f.path));
+  let keywordOnly = 0;
   db.transaction(() => {
     const present = new Set(files.map((f) => f.path));
     for (const r of db.prepare('SELECT path FROM files WHERE repo_id=?').all(repoId) as { path: string }[]) {
@@ -323,9 +344,17 @@ export async function analyzeDirectory(
       const meta = { routes: fx.routes, security: fx.security, infra: fx.infra, env: fx.envVars, isEntry: fx.isEntry, isTest: fx.isTest, module: fileToModule.get(f.path) };
       insFile.run(repoId, f.path, f.lang, f.size, f.hash, f.lines, JSON.stringify(meta));
       for (const s of fx.symbols) insSym.run(repoId, f.path, s.name, s.kind, s.line, s.exported ? 1 : 0, s.endLine ?? s.line, s.parent ?? null, s.signature ?? null);
+      // Snapshots, other-language translations and generated or data files stay out of search;
+      // tests are searchable by keyword but not embedded.
+      // Left-out files are still stored (not searchable) so they can be read, grepped and exported.
+      const { level, reason } = indexLevel(f.path, f.content, fx.isTest, catalogFolders);
+      if (level === 'skip') skipped.set(reason!, (skipped.get(reason!) ?? 0) + 1);
+      if (level === 'keyword') keywordOnly++;
       for (const c of chunkFile(f.path, f.content)) {
-        const info = insChunk.run(repoId, c.path, c.startLine, c.endLine, c.content);
-        chunkIds.push({ id: Number(info.lastInsertRowid), text: `${c.path}\n${c.content}` });
+        const reuse = level === 'full' && embeddingModel ? previousVectors.get(chunkKey(c.path, c.content)) : undefined;
+        const info = insChunk.run(repoId, c.path, c.startLine, c.endLine, c.content, reuse ?? null, reuse ? embeddingModel : null, level === 'skip' ? 0 : 1);
+        if (reuse) reusedVectors++;
+        else if (level === 'full') chunkIds.push({ id: Number(info.lastInsertRowid), text: `${c.path}\n${c.content}` });
       }
     }
     for (const e of graph.edges) insEdge.run(repoId, e.from, e.to, e.kind, e.line);
@@ -333,14 +362,21 @@ export async function analyzeDirectory(
     for (const [f, pkgs] of graph.external) for (const p of pkgs) insEdge.run(repoId, f, `pkg:${p}`, 'package', null);
   })();
 
-  if (embeddings) {
-    progress('embed', `Embedding ${chunkIds.length} chunks`, 0.5);
+  const skippedTotal = [...skipped.values()].reduce((a, b) => a + b, 0);
+  log('info', 'analysis.index', { files: files.length, keywordOnly, skipped: Object.fromEntries(skipped), reusedVectors, toEmbed: embeddings ? chunkIds.length : 0 });
+  progress(
+    'index',
+    `Indexed ${files.length - skippedTotal} files${skippedTotal ? `; left out ${skippedTotal} (${[...skipped].map(([r, n]) => `${n} ${SKIP_LABEL[r]}`).join(', ')})` : ''}`,
+    0.5,
+  );
+  if (embeddings && chunkIds.length) {
+    progress('embed', `Embedding ${chunkIds.length} new or changed chunks${reusedVectors ? ` (${reusedVectors} reused)` : ''}`, 0.5);
     try {
-      const upd = db.prepare('UPDATE chunks SET embedding=? WHERE id=?');
+      const upd = db.prepare('UPDATE chunks SET embedding=?, embedding_model=? WHERE id=?');
       for (let i = 0; i < chunkIds.length; i += 256) {
         const slice = chunkIds.slice(i, i + 256);
         const vecs = await embeddings.embed(slice.map((c) => c.text));
-        db.transaction(() => slice.forEach((c, j) => upd.run(Buffer.from(vecs[j].buffer), c.id)))();
+        db.transaction(() => slice.forEach((c, j) => upd.run(Buffer.from(vecs[j].buffer), embeddingModel, c.id)))();
         progress('embed', `Embedded ${Math.min(i + 256, chunkIds.length)}/${chunkIds.length} chunks`, 0.5 + 0.5 * (Math.min(i + 256, chunkIds.length) / chunkIds.length));
       }
     } catch (err) {

@@ -131,9 +131,16 @@ export function isDataLike(content: string): boolean {
   let longChars = 0;
   for (const line of content.split('\n')) {
     if (line.length <= 300) continue;
+    // Prose in scripts written without spaces (Chinese, Japanese, Thai) is mostly non-ASCII;
+    // minified code and base64 are ASCII.
     let spaces = 0;
-    for (let i = 0; i < line.length; i++) if (line.charCodeAt(i) === 32) spaces++;
-    if (spaces / line.length < 0.05) longChars += line.length;
+    let nonAscii = 0;
+    for (let i = 0; i < line.length; i++) {
+      const c = line.charCodeAt(i);
+      if (c === 32) spaces++;
+      else if (c > 127) nonAscii++;
+    }
+    if (spaces / line.length < 0.05 && nonAscii / line.length < 0.3) longChars += line.length;
   }
   if (longChars / content.length > 0.5) return true;
   let digits = 0;
